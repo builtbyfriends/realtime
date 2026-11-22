@@ -96,7 +96,7 @@ export type DataDefinition<S extends Schema, F extends Record<string, AnyFn>, J 
    * gets the answer, and a new answer after each commit that touches the query's topics, so it doesn't refetch. Return
    * null to refuse it. `output` is checked against the answer before it goes out, as a procedure's output would be.
    */
-  syncQuery?: (actor: string, name: string, input: unknown) => SyncQueryPlan | null;
+  syncQuery?: (actor: string, name: string, input: unknown) => SyncQueryPlan | null | Promise<SyncQueryPlan | null>;
   /** Attempts per job before it is parked as failed. Default 5. */
   maxJobAttempts?: number;
   /** How long a plain job may hold the one-at-a-time lane before the next one starts beside it. Default 120000 (two minutes). */
@@ -234,7 +234,7 @@ type Resolved = {
   syncAccess?: (ctx: QueryCtx<any>, actor: string, group: string) => boolean;
   syncRecheck?: (topics: string[]) => boolean;
   syncTopics?: (ctx: QueryCtx<any>, actor: string, topic: string) => boolean;
-  syncQuery?: (actor: string, name: string, input: unknown) => SyncQueryPlan | null;
+  syncQuery?: (actor: string, name: string, input: unknown) => SyncQueryPlan | null | Promise<SyncQueryPlan | null>;
   maxJobAttempts?: number;
   laneMs?: number;
 };
@@ -279,7 +279,7 @@ export class Engine {
   async liveQuery(actor: string, name: string, input: unknown): Promise<QueryAnswer | null> {
     let plan: SyncQueryPlan | null | undefined;
     try {
-      plan = this.def.syncQuery?.(actor, name, input);
+      plan = await this.def.syncQuery?.(actor, name, input);
     } catch {
       return null;
     }
