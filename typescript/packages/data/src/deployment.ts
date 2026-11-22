@@ -1,6 +1,6 @@
 import { Db, DbReader, syncSchema } from './db.js';
 import { currentEpoch, pull, syncChanges, type Change, type ChangeBatch, type PullResult } from './changes.js';
-import { SyncSockets, type SocketIdentity } from './sockets.js';
+import { SyncSockets, type QueryAnswer, type SocketIdentity } from './sockets.js';
 
 /** The header the door sets on a sync socket request: JSON `{ actor, groups }`. See `syncRequest`. */
 export const SYNC_HEADER = 'x-realtime-sync';
@@ -91,11 +91,22 @@ export type DataDefinition<S extends Schema, F extends Record<string, AnyFn>, J 
    * is refused.
    */
   syncTopics?: (ctx: QueryCtx<S>, actor: string, topic: string) => boolean;
+  /**
+   * Which query function answers live query `name` with `input` for `actor`, over its sync socket. A device that asks
+   * gets the answer, and a new answer after each commit that touches the query's topics, so it doesn't refetch. Return
+   * null to refuse it. `output` is checked against the answer before it goes out, as a procedure's output would be.
+   */
+  syncQuery?: (actor: string, name: string, input: unknown) => SyncQueryPlan | null;
   /** Attempts per job before it is parked as failed. Default 5. */
   maxJobAttempts?: number;
   /** How long a plain job may hold the one-at-a-time lane before the next one starts beside it. Default 120000 (two minutes). */
   laneMs?: number;
 };
+
+/** How the object answers one live query over the socket. */
+export type SyncQueryPlan = { fn: string; args: unknown; output?: StandardSchema };
+type StandardSchema = { '~standard': { validate(value: unknown): unknown } };
+type Validated = { value?: unknown; issues?: readonly unknown[] };
 
 type Stub = { run(kind: string, name: string, args: unknown): Promise<any>; job(id: string): Promise<ScheduledJob | null>; pull(groups: string[], after: number, limit?: number): Promise<PullResult> };
 type Namespace = { idFromName(name: string): unknown; get(id: any): any };
@@ -151,6 +162,7 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
             view: (actor, changes) => own.view(actor, changes),
             access: (actor, groups) => own.access(actor, groups),
             topicAccess: (actor, topics) => own.topicAccess(actor, topics),
+            query: (actor, name, input) => own.liveQuery(actor, name, input),
             epoch: () => own.epoch(),
           });
           own.onTopics((topics) => this.#sockets.publish(topics));
@@ -222,6 +234,7 @@ type Resolved = {
   syncAccess?: (ctx: QueryCtx<any>, actor: string, group: string) => boolean;
   syncRecheck?: (topics: string[]) => boolean;
   syncTopics?: (ctx: QueryCtx<any>, actor: string, topic: string) => boolean;
+  syncQuery?: (actor: string, name: string, input: unknown) => SyncQueryPlan | null;
   maxJobAttempts?: number;
   laneMs?: number;
 };
@@ -260,6 +273,26 @@ export class Engine {
         return false;
       }
     });
+  }
+
+  /** Answers live query `name` for `actor` by `syncQuery`. Null when it's refused. */
+  async liveQuery(actor: string, name: string, input: unknown): Promise<QueryAnswer | null> {
+    let plan: SyncQueryPlan | null | undefined;
+    try {
+      plan = this.def.syncQuery?.(actor, name, input);
+    } catch {
+      return null;
+    }
+    const fn = plan && Object.hasOwn(this.def.functions, plan.fn) ? this.def.functions[plan.fn] : undefined;
+    if (!plan || fn?.kind !== 'query') return null;
+    try {
+      const value = await this.run('query', plan.fn, plan.args);
+      if (!plan.output) return { value };
+      const checked = (await plan.output['~standard'].validate(value)) as Validated;
+      return checked.issues ? { error: 'invalid output' } : { value: checked.value };
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) };
+    }
   }
 
   /** @internal Called after each commit that touched synced tables, before `onChanges`. */

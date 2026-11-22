@@ -1,6 +1,6 @@
 {
   "name": "@builtbyfriends/realtime-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Stateless MCP server for an realtime registry on Cloudflare Workers",
   "type": "module",
   "sideEffects": false,
@@ -16,7 +16,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@builtbyfriends/realtime": "0.3.0"
+    "@builtbyfriends/realtime": "0.4.0"
   },
   "peerDependencies": {
     "agents": ">=0.33.0",

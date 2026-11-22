@@ -184,3 +184,93 @@ describe('live topics over the socket', () => {
     expect(engine.epoch()).toMatch(/^[0-9a-f-]{36}$/);
   });
 });
+
+describe('live queries over the socket', () => {
+  const schema = defineSchema({
+    pins: table<{ room: string; text: string; secret: string }>({ topics: (p) => [`pins:room:${p.room}`], indexes: { by_room: ['room'] } }),
+    members: table<{ room: string; user: string }>({ indexes: { by_user: ['user', 'room'] } }),
+  });
+  const output = {
+    '~standard': {
+      validate: (v: unknown) => (Array.isArray(v) ? { value: v.map(({ text }: { text: string }) => ({ text })) } : { issues: [{ message: 'not a list' }] }),
+    },
+  };
+
+  function setup() {
+    const data = defineData({
+      schema,
+      functions: ({ query, mutation }) => ({
+        pin: mutation((ctx, a: { room: string; text: string }) => void ctx.db.insert('pins', { ...a, secret: 's' })),
+        join: mutation((ctx, a: { room: string; user: string }) => void ctx.db.insert('members', a)),
+        leave: mutation((ctx, a: { room: string; user: string }) => {
+          const row = ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', a.user).eq('room', a.room)).first();
+          if (row) ctx.db.delete('members', row._id);
+        }),
+        listPins: query((ctx, a: { room: string; userId: string }) => ctx.db.query('pins').withIndex('by_room', (q) => q.eq('room', a.room)).collect()),
+      }),
+      syncTopics: (ctx, actor, topic) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', topic.split(':')[2]!)).first(),
+      syncRecheck: (topics) => topics.includes('members'),
+      syncQuery: (actor, name, input) => (name === 'pins.list' ? { fn: 'listPins', args: { ...(input as object), userId: actor }, output } : null),
+    });
+    const engine = data.engine(memoryStorage());
+    engine.init();
+    const all: ReturnType<typeof fakeSocket>[] = [];
+    const sockets = new SyncSockets(
+      { acceptWebSocket: (ws: any) => void all.push(ws), getWebSockets: () => all },
+      { pull: (_a, g, after, l) => engine.pull(g, after, l), topicAccess: (a, t) => engine.topicAccess(a, t), query: (a, n, i) => engine.liveQuery(a, n, i) },
+    );
+    engine.onTopics((t) => sockets.publish(t));
+    engine.onRecheck(() => sockets.recheck());
+    const m = (name: string, args: unknown) => engine.run('mutation', name, args);
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    return { sockets, m, tick };
+  }
+
+  it('answers a live query, answers again after a commit that touches it, and stops once access goes', async () => {
+    const { sockets, m, tick } = setup();
+    await m('join', { room: 'x', user: 'ann' });
+    await m('pin', { room: 'x', text: 'one' });
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: [] });
+    sockets.message(a, JSON.stringify({ type: 'query', id: 'q1', name: 'pins.list', input: { room: 'x' }, topics: ['pins:room:x'] }));
+    sockets.message(a, JSON.stringify({ type: 'query', id: 'q2', name: 'pins.list', input: { room: 'y' }, topics: ['pins:room:y'] }));
+    sockets.message(a, JSON.stringify({ type: 'query', id: 'q3', name: 'other', input: {}, topics: ['pins:room:x'] }));
+    await tick();
+    expect(a.sent).toHaveLength(3);
+    expect(a.sent).toEqual(expect.arrayContaining([
+      { type: 'result', id: 'q1', value: [{ text: 'one' }] },
+      { type: 'result', id: 'q2', denied: true },
+      { type: 'result', id: 'q3', denied: true },
+    ]));
+    a.sent.length = 0;
+    await m('pin', { room: 'x', text: 'two' });
+    await m('pin', { room: 'y', text: 'other room' });
+    await tick();
+    expect(a.sent).toEqual([{ type: 'result', id: 'q1', value: [{ text: 'one' }, { text: 'two' }] }]);
+    await m('leave', { room: 'x', user: 'ann' });
+    expect(a.sent.at(-1)).toEqual({ type: 'result', id: 'q1', denied: true });
+    const count = a.sent.length;
+    await m('pin', { room: 'x', text: 'three' });
+    await tick();
+    expect(a.sent).toHaveLength(count);
+  });
+
+  it('sends nothing when the answer is the same, and stops after unquery', async () => {
+    const { sockets, m, tick } = setup();
+    await m('join', { room: 'x', user: 'ann' });
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: [] });
+    sockets.message(a, JSON.stringify({ type: 'query', id: 1, name: 'pins.list', input: { room: 'x' }, topics: ['pins:room:x', 'members'] }));
+    await tick();
+    expect(a.sent).toEqual([{ type: 'result', id: '1', denied: true }]);
+    sockets.message(a, JSON.stringify({ type: 'query', id: 2, name: 'pins.list', input: { room: 'x' }, topics: ['pins:room:x'] }));
+    await tick();
+    await m('join', { room: 'x', user: 'bob' });
+    await tick();
+    expect(a.sent.slice(1)).toEqual([{ type: 'result', id: '2', value: [] }]);
+    sockets.message(a, JSON.stringify({ type: 'unquery', ids: ['2'] }));
+    await m('pin', { room: 'x', text: 'one' });
+    await tick();
+    expect(a.sent).toHaveLength(2);
+  });
+});
