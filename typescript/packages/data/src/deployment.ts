@@ -1,5 +1,5 @@
 import { Db, DbReader, syncSchema } from './db.js';
-import { pull, syncChanges, type Change, type ChangeBatch, type PullResult } from './changes.js';
+import { currentEpoch, pull, syncChanges, type Change, type ChangeBatch, type PullResult } from './changes.js';
 import { SyncSockets, type SocketIdentity } from './sockets.js';
 
 /** The header the door sets on a sync socket request: JSON `{ actor, groups }`. See `syncRequest`. */
@@ -85,6 +85,12 @@ export type DataDefinition<S extends Schema, F extends Record<string, AnyFn>, J 
    * private). When it says yes, each open socket's groups are checked again with `syncAccess`.
    */
   syncRecheck?: (topics: string[]) => boolean;
+  /**
+   * Whether `actor` may hear live topic `topic` over its sync socket. A device that listens gets a `topics` message after
+   * each commit that touches one, and refetches what reads it, as it would from a live stream. Without it, every listen
+   * is refused.
+   */
+  syncTopics?: (ctx: QueryCtx<S>, actor: string, topic: string) => boolean;
   /** Attempts per job before it is parked as failed. Default 5. */
   maxJobAttempts?: number;
   /** How long a plain job may hold the one-at-a-time lane before the next one starts beside it. Default 120000 (two minutes). */
@@ -144,7 +150,10 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
             pull: (_actor, groups, after, limit) => own.pull(groups, after, limit),
             view: (actor, changes) => own.view(actor, changes),
             access: (actor, groups) => own.access(actor, groups),
+            topicAccess: (actor, topics) => own.topicAccess(actor, topics),
+            epoch: () => own.epoch(),
           });
+          own.onTopics((topics) => this.#sockets.publish(topics));
           this.#engine.listen((batch) => this.#sockets.broadcast(batch));
           this.#engine.onRecheck(() => this.#sockets.recheck());
           // Decision: schema sync is synchronous, but block anyway so no request sees a half-built table.
@@ -212,6 +221,7 @@ type Resolved = {
   onChanges?: (batch: ChangeBatch, env: any) => void | Promise<void>;
   syncAccess?: (ctx: QueryCtx<any>, actor: string, group: string) => boolean;
   syncRecheck?: (topics: string[]) => boolean;
+  syncTopics?: (ctx: QueryCtx<any>, actor: string, topic: string) => boolean;
   maxJobAttempts?: number;
   laneMs?: number;
 };
@@ -226,6 +236,31 @@ export class Engine {
 
   private readonly listeners: ((batch: ChangeBatch) => void)[] = [];
   private readonly rechecks: (() => void)[] = [];
+  private readonly topicListeners: ((topics: string[]) => void)[] = [];
+
+  /** @internal Called after each commit with the topics it touched. */
+  onTopics(fn: (topics: string[]) => void): void {
+    this.topicListeners.push(fn);
+  }
+
+  /** This storage's epoch, sent with positions. */
+  epoch(): string {
+    return currentEpoch(this.storage);
+  }
+
+  /** The topics out of `topics` that `actor` may hear, by `syncTopics`. None without it. */
+  topicAccess(actor: string, topics: string[]): string[] {
+    const check = this.def.syncTopics;
+    if (!check) return [];
+    const ctx = this.reader();
+    return topics.filter((t) => {
+      try {
+        return check(ctx, actor, t);
+      } catch {
+        return false;
+      }
+    });
+  }
 
   /** @internal Called after each commit that touched synced tables, before `onChanges`. */
   listen(fn: (batch: ChangeBatch) => void): void {
@@ -375,6 +410,13 @@ export class Engine {
         fn(batch);
       } catch (e) {
         console.error('change listener failed', e);
+      }
+    }
+    if (touched.size) for (const fn of this.topicListeners) {
+      try {
+        fn([...touched]);
+      } catch (e) {
+        console.error('topic listener failed', e);
       }
     }
     if (touched.size && this.rechecks.length && this.def.syncRecheck?.([...touched])) for (const fn of this.rechecks) {

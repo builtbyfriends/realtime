@@ -47,6 +47,12 @@ export type SyncReader = { db: DbReader<any>; actor: string; now: number };
 export function syncChanges(storage: DataStorage): void {
   run(storage, `CREATE TABLE IF NOT EXISTS _changes (tbl TEXT NOT NULL, id TEXT NOT NULL, grp TEXT NOT NULL, seq INTEGER NOT NULL, deleted INTEGER NOT NULL, PRIMARY KEY (tbl, id, grp)) WITHOUT ROWID`);
   run(storage, `CREATE INDEX IF NOT EXISTS _changes_by_group ON _changes (grp, seq)`);
+  run(storage, `INSERT OR IGNORE INTO _meta (key,value) VALUES ('epoch',?)`, crypto.randomUUID());
+}
+
+/** This storage's epoch: made once when the change index is, so positions from a wiped or replaced storage don't carry over. */
+export function currentEpoch(storage: DataStorage): string {
+  return run<{ value: string }>(storage, `SELECT value FROM _meta WHERE key='epoch'`)[0]?.value ?? '';
 }
 
 /** The latest position, or 0 before the first synced change. */

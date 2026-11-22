@@ -126,3 +126,61 @@ describe('watching groups', () => {
     expect(a.sent).toHaveLength(2);
   });
 });
+
+describe('live topics over the socket', () => {
+  const schema = defineSchema({
+    pins: table<{ room: string }>({ topics: (p) => [`pins:room:${p.room}`] }),
+    members: table<{ room: string; user: string }>({ indexes: { by_user: ['user', 'room'] } }),
+  });
+
+  function setup() {
+    const data = defineData({
+      schema,
+      functions: ({ mutation }) => ({
+        pin: mutation((ctx, a: { room: string }) => void ctx.db.insert('pins', a)),
+        join: mutation((ctx, a: { room: string; user: string }) => void ctx.db.insert('members', a)),
+        leave: mutation((ctx, a: { room: string; user: string }) => {
+          const row = ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', a.user).eq('room', a.room)).first();
+          if (row) ctx.db.delete('members', row._id);
+        }),
+      }),
+      syncTopics: (ctx, actor, topic) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', topic.split(':')[2]!)).first(),
+      syncRecheck: (topics) => topics.includes('members'),
+    });
+    const engine = data.engine(memoryStorage());
+    engine.init();
+    const all: { tags: string[]; ws: ReturnType<typeof fakeSocket> }[] = [];
+    const state = {
+      acceptWebSocket: (ws: any, tags: string[] = []) => void all.push({ ws, tags }),
+      getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
+    };
+    const sockets = new SyncSockets(state, {
+      pull: (_a, g, after, l) => engine.pull(g, after, l),
+      topicAccess: (a, t) => engine.topicAccess(a, t),
+      epoch: () => engine.epoch(),
+    });
+    engine.onTopics((t) => sockets.publish(t));
+    engine.onRecheck(() => sockets.recheck());
+    const m = (name: string, args: unknown) => engine.run('mutation', name, args);
+    return { sockets, m, engine };
+  }
+
+  it('tells a listener a topic changed, refuses topics it may not hear, and stops once access goes', async () => {
+    const { sockets, m, engine } = setup();
+    await m('join', { room: 'x', user: 'ann' });
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: [] });
+    sockets.message(a, JSON.stringify({ type: 'listen', topics: ['pins:room:x', 'pins:room:y'], id: 1 }));
+    expect(a.sent[0]).toEqual({ type: 'listening', id: 1, topics: ['pins:room:x'], denied: ['pins:room:y'] });
+    await m('pin', { room: 'x' });
+    await m('pin', { room: 'y' });
+    expect(a.sent.slice(1)).toEqual([{ type: 'topics', topics: ['pins:room:x'] }]);
+    await m('leave', { room: 'x', user: 'ann' });
+    expect(a.sent.at(-1)).toEqual({ type: 'unheard', topics: ['pins:room:x'] });
+    await m('pin', { room: 'x' });
+    expect(a.sent.at(-1)).toEqual({ type: 'unheard', topics: ['pins:room:x'] });
+    sockets.message(a, JSON.stringify({ type: 'pull', after: 0, id: 2 }));
+    expect(a.sent.at(-1)).toMatchObject({ type: 'pull', epoch: engine.epoch() });
+    expect(engine.epoch()).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
