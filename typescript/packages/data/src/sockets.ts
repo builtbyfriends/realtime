@@ -59,7 +59,6 @@ type State = {
   getWebSockets(tag?: string): Array<Socket>;
 };
 
-/** What the sockets need from the data object. */
 export type SyncHooks = {
   pull(actor: string, groups: Array<string>, after: number, limit?: number): PullResult;
   /** The changes as this actor sees them. Leave it out to send them as they are. */
@@ -99,7 +98,6 @@ export class SyncSockets {
     this.hooks = typeof hooks === 'function' ? { pull: (_actor, groups, after, limit) => hooks(groups, after, limit) } : hooks;
   }
 
-  /** Accepts the server end of a WebSocketPair for this caller. */
   accept(ws: Socket, who: SocketIdentity): void {
     const attachment: SocketIdentity = { actor: who.actor, groups: [...new Set(who.groups)], topics: [] };
     if (bytes(attachment) > MAX_ATTACHMENT) {throw new Error('too many sync groups for one socket');}

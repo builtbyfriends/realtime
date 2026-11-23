@@ -60,7 +60,6 @@ function currentSeq(storage: DataStorage): number {
   return Number(run<{ value: string }>(storage, `SELECT value FROM _meta WHERE key='seq'`)[0]?.value ?? 0);
 }
 
-/** The fields of a document a device may see. */
 export function visible(def: TableDef, doc: JsonObject): JsonObject {
   const fields = def.sync?.fields;
   if (!fields) {return doc;}

@@ -1,4 +1,3 @@
-// Decision: a plain bwf route on purpose. It works, but it skips the nine decisions.
 import { defineHandler } from '@builtbyfriends/bwf';
 import { db } from '@builtbyfriends/bwf/db';
 import { contacts } from '@schema';

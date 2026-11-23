@@ -24,7 +24,6 @@ export class Scheduler {
 
   private ended = false;
 
-  /** @internal */
   constructor(
     private readonly storage: DataStorage,
     private readonly knows: (name: string) => boolean,
@@ -79,12 +78,10 @@ export class Scheduler {
     return row ? toJob(row) : null;
   }
 
-  /** @internal */
   due(now: number, limit: number): Array<ScheduledJob> {
     return run<Row>(this.storage, `SELECT * FROM _jobs WHERE status='pending' AND run_at<=? ORDER BY run_at, rowid LIMIT ?`, now, limit).map(toJob);
   }
 
-  /** @internal */
   nextAt(): number | null {
     return run<{ at: number | null }>(this.storage, `SELECT MIN(run_at) AS at FROM _jobs WHERE status='pending'`)[0]?.at ?? null;
   }

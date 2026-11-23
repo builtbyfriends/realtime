@@ -436,7 +436,6 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
       }
     }
     if (handled) {
-      // Decision: output is validated before it leaves, so clients and tools can trust its shape.
       try {
         const out = await validate(d.output.schema, handled.value);
         if (out.ok) {

@@ -10,8 +10,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
-// Decision: the wire protocol is docs/live-protocol.md. Keep this file in step with it.
-
 /** One event the server delivered: something was published to a topic you subscribed to. */
 data class LiveEvent(
     /** The `id` you gave when you subscribed. */
@@ -21,7 +19,6 @@ data class LiveEvent(
     val type: String? = null,
     /** An id the publisher chose. Keep it if you want to send it back as `lastEventId`. */
     val eventId: String? = null,
-    /** The payload. Any JSON. */
     val data: JsonElement? = null,
 )
 
@@ -71,7 +68,6 @@ class SseParser {
     }
 }
 
-/** The subscribe and unsubscribe request, and its answer. */
 object LiveControl {
     const val MAX_OPERATIONS_PER_REQUEST = 100
 
@@ -87,7 +83,6 @@ object LiveControl {
     /** `accepted` is false when the server refused the request as a whole; then `error` says why. */
     data class Response(val accepted: Boolean, val results: List<Result>, val error: Error?)
 
-    /** The JSON body of a control POST. */
     fun body(connectionId: String, operations: List<Operation>): String = buildJsonObject {
         put("connectionId", connectionId)
         put("operations", buildJsonArray {
@@ -127,7 +122,6 @@ object LiveControl {
 /** Milliseconds to wait before reconnect attempt `attempt` (0 is the first): 1, 2, 4, 8, 16, then 30 seconds. */
 fun liveBackoffMillis(attempt: Int): Long = minOf(1_000L shl attempt.coerceIn(0, 5), 30_000L)
 
-/** What can go wrong talking to a live stream. */
 sealed class LiveException(message: String) : Exception(message) {
     class Unauthorized(val status: Int = 401) : LiveException("live: the server answered $status")
     class Status(val status: Int) : LiveException("live: the server answered $status")

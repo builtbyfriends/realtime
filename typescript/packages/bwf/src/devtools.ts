@@ -1,4 +1,3 @@
-// Decision: dev only. The middleware loads this under `vite dev` alone, so production builds leave it out.
 import { createParser } from 'eventsource-parser';
 import type { CallTrace, Registry, ToolGateTrace, TraceEvent } from '@builtbyfriends/realtime';
 import page from 'virtual:realtime/devtools-page';

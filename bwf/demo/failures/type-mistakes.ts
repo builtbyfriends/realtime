@@ -1,4 +1,3 @@
-// Decision: each export below is a mistake on purpose, and `tsc` should reject each one.
 import { z } from 'zod';
 import { procedure } from '@builtbyfriends/realtime-bwf';
 import { signedIn } from './_shared';

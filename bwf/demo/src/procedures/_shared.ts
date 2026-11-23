@@ -11,7 +11,6 @@ export const token = apiTokens<User>(async (hash) => {
   return row ? { id: row.userId, orgId: row.orgId, role: row.role } : null;
 });
 
-// Decision: a profile is still an explicit choice, so it shows in the audit.
 export const signedIn = profile('signed-in').auth(token);
 
 export const adminOnly = profile('admin-only')

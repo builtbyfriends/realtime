@@ -1,7 +1,6 @@
 import Foundation
 
-// Decision: the wire protocol is docs/live-protocol.md. Keep this file in step with it. Nothing here
-// touches the network, so it builds and tests on Linux too.
+// Decision: nothing here touches the network, so it builds and tests on Linux too.
 
 /// Any JSON value, for an event's `data`.
 public enum JSONValue: Codable, Equatable, Sendable {
@@ -92,7 +91,6 @@ public struct SSEParser: Sendable {
   }
 }
 
-/// The subscribe and unsubscribe request, and its answer.
 public enum LiveControl {
   public static let maxOperationsPerRequest = 100
 
@@ -117,7 +115,6 @@ public enum LiveControl {
     }
   }
 
-  /// The JSON body of a control POST.
   public static func body(connectionId: String, operations: [Operation]) throws -> Data {
     struct Body: Encodable { let connectionId: String; let operations: [Operation] }
     return try JSONEncoder().encode(Body(connectionId: connectionId, operations: operations))

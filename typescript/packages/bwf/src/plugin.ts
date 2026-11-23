@@ -106,7 +106,6 @@ export function realtime(options: RealtimePluginOptions = {}): Plugin {
         const url = server.resolvedUrls?.local[0];
         if (url) {server.config.logger.info(`  \u001B[32m➜\u001B[0m  \u001B[1mrealtime\u001B[0m:    \u001B[36m${url.replace(/\/$/, '')}/__realtime\u001B[0m  (network, MCP and AI chat visualizers)`);}
       };
-      // Decision: a new or deleted procedure file changes the registry module itself, so reload it.
       const reload = (file: string) => {
         if (!relative(root, file).startsWith(dir)) {return;}
         for (const env of Object.values(server.environments)) {

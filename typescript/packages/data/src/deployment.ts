@@ -171,7 +171,6 @@ function isSocketPair(value: unknown): value is SocketPair {
   return typeof value === 'function';
 }
 
-/** @internal */
 export function socketIdentity(header: string): SocketIdentity | null {
   try {
     const v: unknown = JSON.parse(header);
@@ -328,7 +327,6 @@ export class Engine {
     this.topicListeners.push(fn);
   }
 
-  /** This storage's epoch, sent with positions. */
   epoch(): string {
     return currentEpoch(this.storage);
   }
@@ -431,7 +429,6 @@ export class Engine {
     syncChanges(this.storage);
   }
 
-  /** What changed in these sync groups after position `after`. */
   pull(groups: ReadonlyArray<string>, after: number, limit?: number): PullResult {
     return pull(this.storage, this.def.schema, groups, after, limit);
   }

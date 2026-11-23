@@ -72,7 +72,6 @@ class LiveClient(
     val lastError: StateFlow<Throwable?> get() = lastErrorState
     private val lastErrorState = MutableStateFlow<Throwable?>(null)
 
-    /** Events for the topics you subscribed to. */
     val events: SharedFlow<LiveEvent> = MutableSharedFlow(extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.SUSPEND)
     private val eventsOut get() = events as MutableSharedFlow<LiveEvent>
 

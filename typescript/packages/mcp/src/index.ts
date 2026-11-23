@@ -7,7 +7,6 @@ import type { CallResult, Exec, JsonSchema, LoadedProcedure, Registry } from '@b
 type ExecutionContextLike = { waitUntil(promise: Promise<unknown>): void };
 
 export type McpHandlerOptions = Omit<CreateMcpHandlerOptions, 'route'> & {
-  /** Server name and version reported to MCP clients. */
   name: string;
   version: string;
   /** Default "/mcp". */

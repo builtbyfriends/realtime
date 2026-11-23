@@ -44,8 +44,6 @@ async function handle(request: Request, env: BwfEnv, waitUntil: (p: Promise<unkn
 
   if (mcp.matches(request)) {return mcp(request, env, ctx);}
 
-  // Decision: AI tools over HTTP are for agent runtimes outside this Worker. Inside the Worker, call
-  // anthropicTools(registry) and runTool(...) from @builtbyfriends/realtime-ai directly.
   if (path === `${app.basePath}/ai/tools.json` && request.method === 'GET') {return new Response(tools, { headers: { 'content-type': 'application/json' } });}
   if (path === `${app.basePath}/ai/run` && request.method === 'POST') {
     const body = readRunBody(await request.json().catch(() => null));

@@ -22,14 +22,12 @@ export function isJsonArray(value: JsonValue): value is ReadonlyArray<JsonValue>
   return Array.isArray(value);
 }
 
-/** Reads a stored document. */
 export function parseDoc(text: string): JsonObject {
   const value: unknown = JSON.parse(text);
   if (!isJsonObject(value)) {throw new Error('a stored document must be an object');}
   return value;
 }
 
-/** Runs one statement to completion and returns its rows. */
 export function run<T extends SqlRow = SqlRow>(storage: DataStorage, query: string, ...bindings: Array<unknown>): Array<T> {
   return storage.sql.exec<T>(query, ...bindings).toArray();
 }

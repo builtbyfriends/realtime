@@ -4,11 +4,11 @@
 ==============================================================================
 
 $ npx tsc --noEmit   (exit 1)
-src/procedures/type-mistakes.ts(11,12): error TS2345: Argument of type '() => Promise<{ count: number; }>' is not assignable to parameter of type '"Undecided: authz, errors, analytics, cli, aiTool. Decide each one (or opt out with a reason) before .handler()"'.
-src/procedures/type-mistakes.ts(14,13): error TS2322: Type '"n/a"' is not assignable to type '"Opt-out reason must say why in at least three words, e.g. \"Public marketing data with no user context\""'.
-src/procedures/type-mistakes.ts(26,31): error TS2345: Argument of type '"ALREADY_ARCHIVED"' is not assignable to parameter of type '"NOT_FOUND"'.
+src/procedures/type-mistakes.ts(10,12): error TS2345: Argument of type '() => Promise<{ count: number; }>' is not assignable to parameter of type '"Undecided: authz, errors, analytics, cli, aiTool. Decide each one (or opt out with a reason) before .handler()"'.
+src/procedures/type-mistakes.ts(13,13): error TS2322: Type '"n/a"' is not assignable to type '"Opt-out reason must say why in at least three words, e.g. \"Public marketing data with no user context\""'.
+src/procedures/type-mistakes.ts(25,31): error TS2345: Argument of type '"ALREADY_ARCHIVED"' is not assignable to parameter of type '"NOT_FOUND"'.
 src/procedures/type-mistakes.ts(29,10): error TS2345: Argument of type '{ policy: string; check: (user: any) => boolean; }' is not assignable to parameter of type '"Decide authentication first: call .auth(provider) or .noAuth({ reason }) before .authz()"'.
-src/procedures/type-mistakes.ts(33,4): error TS2339: Property 'input' does not exist on type 'Builder<Next<Init<BwfGeneratedEnvBindings, "twice">, "input", { in: { a: string; }; inRaw: { a: string; }; }>>'.
+src/procedures/type-mistakes.ts(32,4): error TS2339: Property 'input' does not exist on type 'Builder<Next<Init<BwfGeneratedEnvBindings, "twice">, "input", { in: { a: string; }; inRaw: { a: string; }; }>>'.
 src/procedures/type-mistakes.ts(36,8): error TS2741: Property 'effect' is missing in type '{ description: string; }' but required in type 'McpSpec'.
 src/procedures/type-mistakes.ts(39,11): error TS2741: Property 'needsApproval' is missing in type '{ description: string; }' but required in type 'AiToolSpec'.
 src/procedures/type-mistakes.ts(51,21): error TS2322: Type 'string' is not assignable to type 'number'.

@@ -332,7 +332,6 @@ export function createLive<R extends Typed = Registry>(options: LiveOptions<R>) 
     }
   }
 
-  /** Refetch every query that is currently being watched. */
   function refetchAll(): Promise<Array<void>> {
     const watched: Array<Entry> = [];
     for (const e of entries.values()) {

@@ -24,13 +24,11 @@ const limitOf = (asked: number | undefined, fallback: number) => (typeof asked =
 
 /** Reads. A query function gets this; a mutation gets `Db`, which adds writes. */
 export class DbReader<S extends Schema> {
-  /** @internal */
   constructor(
-    /** @internal */ readonly storage: DataStorage,
-    /** @internal */ readonly schema: S,
+    readonly storage: DataStorage,
+    readonly schema: S,
   ) {}
 
-  /** @internal */
   protected def(name: string): TableDef {
     const def = this.schema[name];
     if (!def) {throw new Error(`no table "${name}" in the schema`);}
@@ -105,7 +103,6 @@ export class Db<S extends Schema> extends DbReader<S> {
   /** @internal Changes to synced tables, written to the change index at the end of the mutation. */
   readonly changes: ChangeRecorder;
 
-  /** @internal */
   constructor(storage: DataStorage, schema: S) {
     super(storage, schema);
     this.changes = new ChangeRecorder(schema);
@@ -236,7 +233,6 @@ export class Db<S extends Schema> extends DbReader<S> {
 }
 
 export class Query<S extends Schema, T extends keyof S & string> {
-  /** @internal */
   constructor(
     private readonly db: DbReader<S>,
     private readonly table: T,
