@@ -1,5 +1,7 @@
-import { McpServer, type CallToolResult } from '@modelcontextprotocol/server';
-import { createMcpHandler, type CreateMcpHandlerOptions } from 'agents/mcp/server';
+import { McpServer } from '@modelcontextprotocol/server';
+import type { CallToolResult } from '@modelcontextprotocol/server';
+import { createMcpHandler } from 'agents/mcp/server';
+import type { CreateMcpHandlerOptions } from 'agents/mcp/server';
 import type { CallResult, JsonSchema, LoadedProcedure, Registry } from '@builtbyfriends/realtime';
 
 type ExecutionContextLike = { waitUntil(promise: Promise<unknown>): void };
@@ -27,7 +29,7 @@ function toToolResult(result: CallResult, structured: boolean): CallToolResult {
   if (result.ok) {
     return {
       content: [{ type: 'text', text: JSON.stringify(result.value) }],
-      ...(structured ? { structuredContent: result.value as Record<string, unknown> } : {}),
+      ...(structured ? { structuredContent: result.value } : {}),
     };
   }
   const { code, message, issues } = result;
@@ -43,7 +45,7 @@ export function buildMcpServer(
   const server = new McpServer({ name: info.name, version: info.version });
   for (const p of registry.procedures.values()) {
     const mcp = p.decisions.mcp;
-    if (mcp.kind !== 'tool') continue;
+    if (mcp.kind !== 'tool') {continue;}
     const structured = p.jsonSchema.output?.type === 'object';
     const run = (args: unknown) =>
       registry
@@ -58,7 +60,7 @@ export function buildMcpServer(
       ...(mcp.title ? { title: mcp.title } : {}),
       description: mcp.description,
       annotations: annotations(p),
-      ...(structured ? { outputSchema: passthrough(p.jsonSchema.output!) } : {}),
+      ...(structured ? { outputSchema: passthrough(p.jsonSchema.output) } : {}),
     };
     if (p.decisions.input.kind === 'schema') {
       server.registerTool(p.toolName, { ...config, inputSchema: passthrough(p.jsonSchema.input ?? { type: 'object' }) }, (args) => run(args));

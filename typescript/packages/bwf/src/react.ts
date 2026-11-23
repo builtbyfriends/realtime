@@ -1,6 +1,8 @@
-import { createLive, type LiveOptions, type Typed } from '@builtbyfriends/realtime-live';
+import { createLive } from '@builtbyfriends/realtime-live';
+import type { LiveOptions, Typed } from '@builtbyfriends/realtime-live';
 import { createLiveHooks } from '@builtbyfriends/realtime-live/react';
-import { bwfTransport, type BwfTransportOptions } from './live.js';
+import { bwfTransport } from './live.js';
+import type { BwfTransportOptions } from './live.js';
 
 export type { ConnectLiveStream } from './live.js';
 

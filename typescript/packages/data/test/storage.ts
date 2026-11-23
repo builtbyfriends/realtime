@@ -11,8 +11,8 @@ export function memoryStorage() {
     sql: {
       exec(query, ...bindings) {
         const stmt = db.prepare(query);
-        const rows = (stmt.all(...(bindings.map(toBinding) as any)) as any[]).map((row) => {
-          for (const k of Object.keys(row)) if (row[k] instanceof Uint8Array) row[k] = row[k].buffer.slice(row[k].byteOffset, row[k].byteOffset + row[k].byteLength);
+        const rows = (stmt.all(...(bindings.map(toBinding) as any)) as Array<any>).map((row) => {
+          for (const k of Object.keys(row)) {if (row[k] instanceof Uint8Array) row[k] = row[k].buffer.slice(row[k].byteOffset, row[k].byteOffset + row[k].byteLength);}
           return row;
         });
         return Object.assign(rows[Symbol.iterator](), { toArray: () => rows }) as any;
@@ -25,9 +25,9 @@ export function memoryStorage() {
         const out = fn();
         db.exec(`RELEASE ${name}`);
         return out;
-      } catch (e) {
+      } catch (error) {
         db.exec(`ROLLBACK TO ${name}; RELEASE ${name}`);
-        throw e;
+        throw error;
       } finally {
         depth--;
       }

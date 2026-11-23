@@ -9,7 +9,7 @@ const analytics = memoryAnalytics();
 const registry = defineRegistry([getContact, purge, ping], { analytics });
 const rpc = rpcHandler(registry, { openapi: { title: 'Test', version: '1' } });
 const ctx = { waitUntil: (_p: Promise<unknown>) => {} };
-const fetchVia: typeof fetch = async (input, init) => rpc(new Request(input as string, init), env, ctx);
+const fetchVia: typeof fetch = async (input, init) => rpc(new Request(input, init), env, ctx);
 const post = (path: string, body?: unknown, headers: Record<string, string> = {}) =>
   rpc(new Request(`https://api.test${path}`, { method: 'POST', body: body === undefined ? '' : JSON.stringify(body), headers }), env, ctx);
 
@@ -69,7 +69,7 @@ describe('typed client', () => {
   });
 
   it('throws RpcError with the code', async () => {
-    const err = await client.call('contacts.get', { orgId: 'o1', id: 'missing' }).catch((e) => e);
+    const err = await client.call('contacts.get', { orgId: 'o1', id: 'missing' }).catch((error) => error);
     expect(err).toBeInstanceOf(RpcError);
     expect(err).toMatchObject({ code: 'NOT_FOUND', status: 404 });
   });

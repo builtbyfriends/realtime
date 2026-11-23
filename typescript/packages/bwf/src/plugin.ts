@@ -39,20 +39,20 @@ export function realtime(options: RealtimePluginOptions = {}): Plugin {
       .filter((f) => !/\.(test|spec)\.|\/_|\.d\.ts$/.test(f))
       .sort();
 
-  const problems = (): string[] => {
-    const out: string[] = [];
+  const problems = (): Array<string> => {
+    const out: Array<string> = [];
     const mwDir = join(root, 'middleware');
     const stub = existsSync(mwDir) && readdirSync(mwDir).some((f) => readFileSync(join(mwDir, f), 'utf8').includes('@builtbyfriends/realtime-bwf/middleware'));
-    if (!stub) out.push('middleware/ has no realtime middleware. Run `npx realtime init`, or create middleware/00.realtime.ts containing: export { default } from \'@builtbyfriends/realtime-bwf/middleware\';');
+    if (!stub) {out.push('middleware/ has no realtime middleware. Run `npx realtime init`, or create middleware/00.realtime.ts containing: export { default } from \'@builtbyfriends/realtime-bwf/middleware\';');}
     const routesDir = join(root, 'routes');
     if (existsSync(routesDir)) {
       for (const f of globSync('**/*.{ts,tsx,js,jsx,mts,mjs}', { cwd: routesDir })) {
         const reason = ALLOW_RE.exec(readFileSync(join(routesDir, f), 'utf8'))?.[1]?.trim() ?? '';
         if (reason.split(/\s+/).filter(Boolean).length < 3)
-          out.push(`routes/${f} is a plain bwf route, so it skips auth, authz, input, output, errors, analytics, MCP, CLI and AI tool decisions. Move it to ${dir}/ as a procedure, or keep it and add "// realtime-allow: <why this must be a raw route>" (at least three words).`);
+          {out.push(`routes/${f} is a plain bwf route, so it skips auth, authz, input, output, errors, analytics, MCP, CLI and AI tool decisions. Move it to ${dir}/ as a procedure, or keep it and add "// realtime-allow: <why this must be a raw route>" (at least three words).`);}
       }
     }
-    if (procedureFiles().length === 0) out.push(`${dir}/ has no procedures.`);
+    if (procedureFiles().length === 0) {out.push(`${dir}/ has no procedures.`);}
     return out;
   };
 
@@ -64,15 +64,15 @@ export function realtime(options: RealtimePluginOptions = {}): Plugin {
     },
     buildStart() {
       const found = problems();
-      if (found.length) this.error(`realtime found ${found.length} problem(s):\n  - ${found.join('\n  - ')}`);
+      if (found.length) {this.error(`realtime found ${found.length} problem(s):\n  - ${found.join('\n  - ')}`);}
     },
     resolveId(id) {
-      if (id === ID) return RESOLVED;
-      if (id === PAGE_ID) return PAGE_RESOLVED;
+      if (id === ID) {return RESOLVED;}
+      if (id === PAGE_ID) {return PAGE_RESOLVED;}
     },
     load(id) {
-      if (id === PAGE_RESOLVED) return `export default ${JSON.stringify(dev ? readFileSync(new URL('./devtools.html', import.meta.url), 'utf8') : '')};`;
-      if (id !== RESOLVED) return;
+      if (id === PAGE_RESOLVED) {return `export default ${JSON.stringify(dev ? readFileSync(new URL('./devtools.html', import.meta.url), 'utf8') : '')};`;}
+      if (id !== RESOLVED) {return;}
       const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
       const files = procedureFiles();
       const logEvents = dev && options.logEventsInDev !== false;
@@ -94,23 +94,23 @@ export function realtime(options: RealtimePluginOptions = {}): Plugin {
       server.printUrls = () => {
         printUrls();
         const url = server.resolvedUrls?.local[0];
-        if (url) server.config.logger.info(`  \x1b[32m➜\x1b[0m  \x1b[1mrealtime\x1b[0m:    \x1b[36m${url.replace(/\/$/, '')}/__realtime\x1b[0m  (network, MCP and AI chat visualizers)`);
+        if (url) {server.config.logger.info(`  \x1b[32m➜\x1b[0m  \x1b[1mrealtime\x1b[0m:    \x1b[36m${url.replace(/\/$/, '')}/__realtime\x1b[0m  (network, MCP and AI chat visualizers)`);}
       };
       // Decision: a new or deleted procedure file changes the registry module itself, so reload it.
       const reload = (file: string) => {
-        if (!relative(root, file).startsWith(dir)) return;
+        if (!relative(root, file).startsWith(dir)) {return;}
         for (const env of Object.values(server.environments)) {
           const mod = env.moduleGraph.getModuleById(RESOLVED);
-          if (mod) env.moduleGraph.invalidateModule(mod);
+          if (mod) {env.moduleGraph.invalidateModule(mod);}
         }
       };
       const pagePath = fileURLToPath(new URL('./devtools.html', import.meta.url));
       server.watcher.add(pagePath);
       server.watcher.on('change', (file) => {
-        if (file !== pagePath) return;
+        if (file !== pagePath) {return;}
         for (const env of Object.values(server.environments)) {
           const mod = env.moduleGraph.getModuleById(PAGE_RESOLVED);
-          if (mod) env.moduleGraph.invalidateModule(mod);
+          if (mod) {env.moduleGraph.invalidateModule(mod);}
         }
       });
       server.watcher.on('add', reload);

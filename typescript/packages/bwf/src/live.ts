@@ -52,17 +52,17 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
   let opens = 0;
 
   function open() {
-    if (stream) return stream;
+    if (stream) {return stream;}
     const Native = (options.headers
       ? fetchEventSource({ headers: options.headers, fetch: options.fetch })
       : (globalThis as any).EventSource) as new (url: string, init?: { withCredentials?: boolean }) => any;
-    if (!Native) throw new Error('EventSource is not available here; live queries need a browser (or a polyfill)');
+    if (!Native) {throw new Error('EventSource is not available here; live queries need a browser (or a polyfill)');}
     // Decision: bwf opens a fresh EventSource for each reconnect, so count `open` events across all of them.
     class Watching extends Native {
       constructor(url: string, init?: { withCredentials?: boolean }) {
         super(url, init);
         this.addEventListener('open', () => {
-          if (++opens > 1) for (const cb of [...reconnects]) cb();
+          if (++opens > 1) {for (const cb of [...reconnects]) cb();}
         });
       }
     }
@@ -86,7 +86,7 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
   const topics = new Map<string, { listeners: Set<() => void>; stop: Promise<() => Promise<void>> }>();
 
   function release(topic: string, entry: { listeners: Set<() => void>; stop: Promise<() => Promise<void>> }) {
-    if (entry.listeners.size || topics.get(topic) !== entry) return;
+    if (entry.listeners.size || topics.get(topic) !== entry) {return;}
     topics.delete(topic);
     void entry.stop.then((stop) => stop()).catch(() => {});
   }
@@ -100,23 +100,23 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
           id: topic,
           topic,
           onEvent: () => {
-            for (const listener of [...listeners]) listener();
+            for (const listener of [...listeners]) {listener();}
           },
         });
         entry = { listeners, stop };
         topics.set(topic, entry);
         const failed = entry;
         stop.catch(() => {
-          if (topics.get(topic) === failed) topics.delete(topic);
+          if (topics.get(topic) === failed) {topics.delete(topic);}
         });
       }
       const listener = () => onEvent();
       entry.listeners.add(listener);
       try {
         await entry.stop;
-      } catch (err) {
+      } catch (error) {
         entry.listeners.delete(listener);
-        throw err;
+        throw error;
       }
       const current = entry;
       return () => {

@@ -21,8 +21,8 @@ type Exchange = {
   resHeaders?: Record<string, string>;
   resBody?: unknown;
   error?: string;
-  calls: Omit<CallTrace, 'request'>[];
-  gates: Omit<ToolGateTrace, 'request'>[];
+  calls: Array<Omit<CallTrace, 'request'>>;
+  gates: Array<Omit<ToolGateTrace, 'request'>>;
 };
 
 const MAX = 400;
@@ -40,15 +40,15 @@ const mask = (value: string) => {
 const headers = (h: Headers) => {
   const out: Record<string, string> = {};
   h.forEach((v, k) => {
-    if (!NOISE_HEADERS.test(k)) out[k] = SECRET_HEADERS.test(k) ? mask(v) : v;
+    if (!NOISE_HEADERS.test(k)) {out[k] = SECRET_HEADERS.test(k) ? mask(v) : v;}
   });
   return out;
 };
 
 function parseBody(text: string, contentType: string | null): unknown {
-  if (!text) return undefined;
+  if (!text) {return undefined;}
   if (contentType?.includes('text/event-stream')) {
-    const events: unknown[] = [];
+    const events: Array<unknown> = [];
     const parser = createParser({
       onEvent: ({ data }) => {
         try {
@@ -71,22 +71,22 @@ function parseBody(text: string, contentType: string | null): unknown {
 
 export function createDevtools(registry: Registry, app: { name: string; basePath: string; mcpRoute: string }) {
   const route = '/__realtime';
-  const exchanges: Exchange[] = [];
+  const exchanges: Array<Exchange> = [];
   const byRequest = new WeakMap<Request, Exchange>();
   let seq = 0;
   let rev = 0;
 
   const touch = (ex: Exchange) => (ex.rev = ++rev);
   const add = (ex: Omit<Exchange, 'id' | 'rev'>) => {
-    const full = { ...ex, id: ++seq, rev: ++rev } as Exchange;
+    const full = { ...ex, id: ++seq, rev: ++rev };
     exchanges.push(full);
-    if (exchanges.length > MAX) exchanges.splice(0, exchanges.length - MAX);
+    if (exchanges.length > MAX) {exchanges.splice(0, exchanges.length - MAX);}
     return full;
   };
   const kindOf = (path: string): Kind | null => {
-    if (path === app.mcpRoute) return 'mcp';
-    if (path.startsWith(`${app.basePath}/ai/`)) return 'ai';
-    if (path === app.basePath || path.startsWith(`${app.basePath}/`)) return 'rpc';
+    if (path === app.mcpRoute) {return 'mcp';}
+    if (path.startsWith(`${app.basePath}/ai/`)) {return 'ai';}
+    if (path === app.basePath || path.startsWith(`${app.basePath}/`)) {return 'rpc';}
     return null;
   };
 
@@ -98,8 +98,8 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
       ex = add({ at: event.at, kind: 'direct', method: 'CALL', url: '', path: event.type === 'call' ? event.procedure : event.tool, reqHeaders: {}, calls: [], gates: [] });
       byRequest.set(request, ex);
     }
-    if (rest.type === 'call') ex.calls.push(rest);
-    else ex.gates.push(rest);
+    if (rest.type === 'call') {ex.calls.push(rest);}
+    else {ex.gates.push(rest);}
     touch(ex);
   });
 
@@ -136,11 +136,11 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
         .catch(() => {});
       touch(ex);
       return res;
-    } catch (e) {
-      ex.error = (e as Error)?.message ?? String(e);
+    } catch (error) {
+      ex.error = (error as Error)?.message ?? String(error);
       ex.ms = Date.now() - ex.at;
       touch(ex);
-      throw e;
+      throw error;
     }
   };
 
@@ -169,7 +169,7 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
         const since = Number(url.searchParams.get('since') ?? 0);
         return json({ rev, exchanges: exchanges.filter((e) => e.rev > since), ids: exchanges.map((e) => e.id) });
       }
-      if (sub === '/registry') return json(registryInfo());
+      if (sub === '/registry') {return json(registryInfo());}
       if (sub === '/clear' && request.method === 'POST') {
         exchanges.length = 0;
         rev++;
@@ -181,7 +181,7 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
     async record(request: Request, waitUntil: (p: Promise<unknown>) => void, run: () => Promise<Response | null>): Promise<Response | null> {
       const url = new URL(request.url);
       const kind = kindOf(url.pathname);
-      if (!kind) return run();
+      if (!kind) {return run();}
       const reqText = request.method === 'GET' || request.method === 'HEAD' ? '' : await request.clone().text().catch(() => '');
       const ex = add({
         at: Date.now(),
@@ -217,11 +217,11 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
         );
         touch(ex);
         return res;
-      } catch (e) {
-        ex.error = (e as Error)?.message ?? String(e);
+      } catch (error) {
+        ex.error = (error as Error)?.message ?? String(error);
         ex.ms = Date.now() - ex.at;
         touch(ex);
-        throw e;
+        throw error;
       }
     },
   };

@@ -31,8 +31,8 @@ const step = (s) => console.log(`  ${s}`);
 
 try {
   for (let i = 0; ; i++) {
-    if (i > 90) throw new Error(`vite dev did not start:\n${log}`);
-    try { if ((await fetch(`${base}/rpc/status`, { method: 'POST' })).ok) break; } catch {}
+    if (i > 90) {throw new Error(`vite dev did not start:\n${log}`);}
+    try { if ((await fetch(`${base}/rpc/status`, { method: 'POST' })).ok) {break;} } catch {}
     await new Promise((r) => setTimeout(r, 500));
   }
   await fetch(`${base}/__realtime/clear`, { method: 'POST' });
@@ -50,7 +50,7 @@ try {
   await rpc('billing.paymentReceived', { orgId: 'o1', amountCents: 4900, currency: 'usd' });
 
   step('CLI: the real realtime CLI, built from the manifest');
-  if (!existsSync(`${root}.cli/realtime.mjs`)) execFileSync('node', ['scripts/build-cli.mjs'], { cwd: root, stdio: 'ignore' });
+  if (!existsSync(`${root}.cli/realtime.mjs`)) {execFileSync('node', ['scripts/build-cli.mjs'], { cwd: root, stdio: 'ignore' });}
   for (const args of [['whoami'], ['contacts', 'search', '--org-id', 'o1', '--query', 'a', '--limit', '2'], ['contacts', 'get', '--org-id', 'o2', '--id', 'c3']]) {
     try { execFileSync('node', ['.cli/realtime.mjs', ...args], { cwd: root, env: { ...process.env, REALTIME_URL: base, REALTIME_TOKEN: 'demo-bob' }, stdio: 'ignore' }); } catch {}
   }
@@ -84,9 +84,9 @@ try {
   step(`  alice: paused on ${held.body?.data?.pending?.map((p) => p.tool).join(', ')}, left waiting for approval`);
 
   console.log(`\nOpen ${base}/__realtime  (Network, MCP and AI chat)`);
-  if (once) stop();
-} catch (e) {
+  if (once) {stop();}
+} catch (error) {
   stop();
-  throw e;
+  throw error;
 }
-if (once) process.exit(0);
+if (once) {process.exit(0);}

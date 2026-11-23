@@ -8,11 +8,11 @@ export type ToolInfo = {
   inputSchema: JsonSchema;
 };
 
-function aiProcedures(registry: Registry<any>): { p: LoadedProcedure; info: ToolInfo }[] {
-  const out: { p: LoadedProcedure; info: ToolInfo }[] = [];
+function aiProcedures(registry: Registry<any>): Array<{ p: LoadedProcedure; info: ToolInfo }> {
+  const out: Array<{ p: LoadedProcedure; info: ToolInfo }> = [];
   for (const p of registry.procedures.values()) {
     const t = p.decisions.aiTool;
-    if (t.kind !== 'tool') continue;
+    if (t.kind !== 'tool') {continue;}
     out.push({
       p,
       info: {
@@ -28,7 +28,7 @@ function aiProcedures(registry: Registry<any>): { p: LoadedProcedure; info: Tool
 }
 
 /** Every procedure that chose `.aiTool()`, with its JSON Schema. */
-export function toolInfo(registry: Registry<any>): ToolInfo[] {
+export function toolInfo(registry: Registry<any>): Array<ToolInfo> {
   return aiProcedures(registry).map((x) => x.info);
 }
 
@@ -56,19 +56,19 @@ export async function runTool(
   const found = aiProcedures(registry).find((x) => x.info.name === toolName);
   const gate = !found ? 'unknown-tool' : !found.info.needsApproval ? 'no-approval-needed' : exec.approved ? 'approved' : 'needs-approval';
   // Decision: report the approval gate, so dev tools can show it next to the call it guards.
-  if (registry.trace?.active) registry.trace.emit({ type: 'tool-gate', at: Date.now(), tool: toolName, ...(found ? { procedure: found.p.name } : {}), request: exec.request, input, gate });
-  if (!found) return { status: 'unknown_tool', tool: toolName };
-  if (gate === 'needs-approval') return { status: 'needs_approval', tool: toolName, input };
+  if (registry.trace?.active) {registry.trace.emit({ type: 'tool-gate', at: Date.now(), tool: toolName, ...(found ? { procedure: found.p.name } : {}), request: exec.request, input, gate });}
+  if (!found) {return { status: 'unknown_tool', tool: toolName };}
+  if (gate === 'needs-approval') {return { status: 'needs_approval', tool: toolName, input };}
   const { approved: _a, ...rest } = exec;
   return { status: 'ok', result: await registry.call(found.p.name, input, { ...rest, surface: 'ai' }) };
 }
 
 /** The `content` string for a tool_result block: the value on success, the error otherwise. */
 export function toolResultContent(run: ToolRunResult): { content: string; is_error: boolean } {
-  if (run.status === 'needs_approval') return { content: JSON.stringify({ error: { code: 'NEEDS_APPROVAL', message: 'A person must approve this call first' } }), is_error: true };
-  if (run.status === 'unknown_tool') return { content: JSON.stringify({ error: { code: 'UNKNOWN_TOOL', message: `No tool ${run.tool}` } }), is_error: true };
+  if (run.status === 'needs_approval') {return { content: JSON.stringify({ error: { code: 'NEEDS_APPROVAL', message: 'A person must approve this call first' } }), is_error: true };}
+  if (run.status === 'unknown_tool') {return { content: JSON.stringify({ error: { code: 'UNKNOWN_TOOL', message: `No tool ${run.tool}` } }), is_error: true };}
   const r = run.result;
-  if (r.ok) return { content: JSON.stringify(r.value), is_error: false };
+  if (r.ok) {return { content: JSON.stringify(r.value), is_error: false };}
   return { content: JSON.stringify({ error: { code: r.code, message: r.message, ...(r.issues ? { issues: r.issues } : {}) } }), is_error: true };
 }
 
@@ -91,7 +91,7 @@ export function aiSdkTools<S>(
       // Decision: the AI SDK only calls execute after its own approval step, so approval is granted here.
       execute: async (input) => {
         const r = await registry.call(p.name, input, { ...exec, surface: 'ai' });
-        if (r.ok) return r.value;
+        if (r.ok) {return r.value;}
         return { error: { code: r.code, message: r.message, ...(r.issues ? { issues: r.issues } : {}) } };
       },
     };

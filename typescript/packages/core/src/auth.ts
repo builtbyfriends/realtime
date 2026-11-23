@@ -21,20 +21,20 @@ export function bearerAuth<Ctx, Env = unknown>(opts: {
 }
 
 /** Tries each provider in order and uses the first that resolves a caller. */
-export function anyOf<Ctx, Env = unknown>(name: string, ...providers: AuthProvider<Ctx, Env>[]): AuthProvider<Ctx, Env> {
+export function anyOf<Ctx, Env = unknown>(name: string, ...providers: Array<AuthProvider<Ctx, Env>>): AuthProvider<Ctx, Env> {
   return {
     name,
     async resolve(request, env) {
       for (const p of providers) {
         const ctx = await p.resolve(request, env);
-        if (ctx != null) return ctx;
+        if (ctx != null) {return ctx;}
       }
       return null;
     },
     actorId: (ctx) => {
       for (const p of providers) {
         const id = p.actorId?.(ctx);
-        if (id) return id;
+        if (id) {return id;}
       }
       return undefined;
     },

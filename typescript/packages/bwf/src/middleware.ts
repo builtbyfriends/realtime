@@ -24,9 +24,9 @@ type HostContext = { req: { raw: Request }; env: any; executionCtx: { waitUntil(
 export default async (c: HostContext, next: () => Promise<unknown>): Promise<Response | void> => {
   const request = c.req.raw;
   const waitUntil = (p: Promise<unknown>) => c.executionCtx.waitUntil(p);
-  if (devtools?.serves(new URL(request.url).pathname)) return devtools.serve(request);
+  if (devtools?.serves(new URL(request.url).pathname)) {return devtools.serve(request);}
   const res = devtools ? await devtools.record(request, waitUntil, () => handle(request, c.env, waitUntil)) : await handle(request, c.env, waitUntil);
-  if (res) return res;
+  if (res) {return res;}
   await next();
 };
 
@@ -35,20 +35,20 @@ async function handle(request: Request, env: any, waitUntil: (p: Promise<unknown
   const path = new URL(request.url).pathname;
   const ctx = { waitUntil };
 
-  if (mcp.matches(request)) return mcp(request, env, ctx);
+  if (mcp.matches(request)) {return mcp(request, env, ctx);}
 
   // Decision: AI tools over HTTP are for agent runtimes outside this Worker. Inside the Worker, call
   // anthropicTools(registry) and runTool(...) from @builtbyfriends/realtime-ai directly.
-  if (path === `${app.basePath}/ai/tools.json` && request.method === 'GET') return new Response(tools, { headers: { 'content-type': 'application/json' } });
+  if (path === `${app.basePath}/ai/tools.json` && request.method === 'GET') {return new Response(tools, { headers: { 'content-type': 'application/json' } });}
   if (path === `${app.basePath}/ai/run` && request.method === 'POST') {
     const body = (await request.json().catch(() => null)) as { tool?: string; input?: unknown; approved?: boolean } | null;
-    if (!body?.tool) return json({ error: { code: 'INVALID_INPUT', message: 'Send { tool, input, approved? }' } }, 400);
+    if (!body?.tool) {return json({ error: { code: 'INVALID_INPUT', message: 'Send { tool, input, approved? }' } }, 400);}
     const run = await runTool(registry, body.tool, body.input, { request, env, waitUntil, approved: body.approved === true });
     return json({ status: run.status, tool_result: toolResultContent(run) });
   }
 
-  if (import.meta.env.DEV && path === `${app.basePath}/audit.md`) return new Response(registry.auditTable(), { headers: { 'content-type': 'text/markdown' } });
+  if (import.meta.env.DEV && path === `${app.basePath}/audit.md`) {return new Response(registry.auditTable(), { headers: { 'content-type': 'text/markdown' } });}
 
-  if (rpc.matches(request)) return rpc(request, env, ctx);
+  if (rpc.matches(request)) {return rpc(request, env, ctx);}
   return null;
 }

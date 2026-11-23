@@ -21,9 +21,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 try {
   for (let i = 0; ; i++) {
-    if (i > 60) throw new Error(`wrangler dev did not start:\n${log}`);
+    if (i > 60) {throw new Error(`wrangler dev did not start:\n${log}`);}
     try {
-      if ((await fetch(`${base}/rpc/messages.list`, { method: 'POST', body: JSON.stringify({ channel: 'warmup' }) })).ok) break;
+      if ((await fetch(`${base}/rpc/messages.list`, { method: 'POST', body: JSON.stringify({ channel: 'warmup' }) })).ok) {break;}
     } catch {}
     await sleep(500);
   }

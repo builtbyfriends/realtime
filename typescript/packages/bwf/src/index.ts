@@ -1,4 +1,5 @@
-import { bearerAuth, createProcedures, type Registry } from '@builtbyfriends/realtime';
+import { bearerAuth, createProcedures } from '@builtbyfriends/realtime';
+import type { Registry } from '@builtbyfriends/realtime';
 
 declare global {
   // Decision: empty here. bwf fills it in from bwf.config.ts and your imports (.bwf/bindings.d.ts).
@@ -38,6 +39,6 @@ export function setAppRegistry(registry: Registry) {
  * anthropicTools() and runTool() from @builtbyfriends/realtime-ai.
  */
 export function appRegistry(): Registry {
-  if (!current) throw new Error('appRegistry() is only available inside a request, after the realtime middleware has loaded');
+  if (!current) {throw new Error('appRegistry() is only available inside a request, after the realtime middleware has loaded');}
   return current;
 }

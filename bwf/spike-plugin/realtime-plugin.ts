@@ -11,9 +11,9 @@ export function realtime(opts: { dir?: string; analytics?: string } = {}): Plugi
   return {
     name: 'realtime:bwf',
     enforce: 'post',
-    resolveId(id) { if (id === REGISTRY) return RESOLVED; },
+    resolveId(id) { if (id === REGISTRY) {return RESOLVED;} },
     load(id) {
-      if (id !== RESOLVED) return;
+      if (id !== RESOLVED) {return;}
       const files = globSync(`${dir}/**/*.{ts,tsx,js}`, { cwd: root }).filter((f) => !/\.(test|spec)\./.test(f)).sort();
       const imports = files.map((f, i) => `import * as m${i} from ${JSON.stringify(join(root, f))};`);
       return [

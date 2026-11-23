@@ -9,7 +9,7 @@ const Message = z.object({ role: z.enum(['user', 'assistant']), content: z.union
 type Msg = z.infer<typeof Message>;
 type ToolUse = { type: 'tool_use'; id: string; name: string; input: unknown };
 
-const toolUses = (m: Msg | undefined): ToolUse[] =>
+const toolUses = (m: Msg | undefined): Array<ToolUse> =>
   m?.role === 'assistant' && Array.isArray(m.content) ? m.content.filter((b): b is typeof b & ToolUse => b.type === 'tool_use') : [];
 
 // Decision: each tool call runs as the signed-in user, so the tools' auth, policies and approvals apply.
@@ -41,11 +41,11 @@ export const ask = procedure('assistant.ask')
   .handler(async ({ input, ctx, env, request, waitUntil, fail }) => {
     const registry = appRegistry();
     const tools = anthropicTools(registry);
-    const messages: Msg[] = [...input.messages];
+    const messages: Array<Msg> = [...input.messages];
     const system = `You help ${ctx.id} manage contacts in organization ${ctx.orgId}. Use the tools; never guess ids.`;
 
     for (let turn = 0; turn < 8; turn++) {
-      const asked = toolUses(messages[messages.length - 1]);
+      const asked = toolUses(messages.at(-1));
       if (asked.length) {
         const results = [];
         const pending = [];
@@ -55,10 +55,10 @@ export const ask = procedure('assistant.ask')
             continue;
           }
           const run = await runTool(registry, t.name, t.input, { request, env, waitUntil, approved: input.approve.includes(t.id) });
-          if (run.status === 'needs_approval') pending.push({ id: t.id, tool: t.name, input: t.input });
-          else results.push({ type: 'tool_result', tool_use_id: t.id, ...toolResultContent(run) });
+          if (run.status === 'needs_approval') {pending.push({ id: t.id, tool: t.name, input: t.input });}
+          else {results.push({ type: 'tool_result', tool_use_id: t.id, ...toolResultContent(run) });}
         }
-        if (pending.length) return { messages, reply: '', pending };
+        if (pending.length) {return { messages, reply: '', pending };}
         messages.push({ role: 'user', content: results });
       }
 
@@ -67,7 +67,7 @@ export const ask = procedure('assistant.ask')
         headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': config.ANTHROPIC_API_KEY ?? '' },
         body: JSON.stringify({ model: config.ANTHROPIC_MODEL, max_tokens: 1024, system, tools, messages }),
       }).catch(() => null);
-      if (!res?.ok) return fail('MODEL_ERROR');
+      if (!res?.ok) {return fail('MODEL_ERROR');}
       const reply = (await res.json()) as { content: Msg['content']; stop_reason: string };
       messages.push({ role: 'assistant', content: reply.content });
       if (reply.stop_reason !== 'tool_use') {

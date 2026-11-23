@@ -1,7 +1,7 @@
 import type { AnalyticsEvent, AnalyticsProvider } from '@builtbyfriends/realtime';
 
 type AnalyticsEngineDataset = {
-  writeDataPoint(point: { indexes?: string[]; blobs?: (string | null)[]; doubles?: number[] }): void;
+  writeDataPoint(point: { indexes?: Array<string>; blobs?: Array<string | null>; doubles?: Array<number> }): void;
 };
 
 /**
@@ -20,7 +20,7 @@ export function analyticsEngine(options: { binding: string }): AnalyticsProvider
     name: 'workers-analytics-engine',
     track(e: AnalyticsEvent, env: any) {
       const dataset = env?.[options.binding] as AnalyticsEngineDataset | undefined;
-      if (!dataset?.writeDataPoint) throw new Error(`analyticsEngine: env.${options.binding} is not an Analytics Engine binding`);
+      if (!dataset?.writeDataPoint) {throw new Error(`analyticsEngine: env.${options.binding} is not an Analytics Engine binding`);}
       dataset.writeDataPoint({
         indexes: [e.procedure],
         blobs: [e.event, e.procedure, e.surface, e.outcome, e.code ?? '', e.actorId ?? '', JSON.stringify(e.props)],
@@ -62,25 +62,25 @@ export function posthog(options: {
           },
         }),
       });
-      if (!res.ok) throw new Error(`posthog: capture failed with HTTP ${res.status}`);
+      if (!res.ok) {throw new Error(`posthog: capture failed with HTTP ${res.status}`);}
     },
   };
 }
 
 /** Sends each event to every provider. A failing provider does not stop the others. */
-export function fanOut(...providers: AnalyticsProvider[]): AnalyticsProvider {
+export function fanOut(...providers: Array<AnalyticsProvider>): AnalyticsProvider {
   return {
     name: providers.map((p) => p.name).join('+'),
     async track(e, env) {
       const results = await Promise.allSettled(providers.map((p) => Promise.resolve().then(() => p.track(e, env))));
       const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
-      if (failed.length) throw new AggregateError(failed.map((f) => f.reason), 'analytics provider failed');
+      if (failed.length) {throw new AggregateError(failed.map((f) => f.reason), 'analytics provider failed');}
     },
   };
 }
 
 /** Keeps events in memory, for tests. */
-export function memoryAnalytics(): AnalyticsProvider & { events: AnalyticsEvent[] } {
-  const events: AnalyticsEvent[] = [];
+export function memoryAnalytics(): AnalyticsProvider & { events: Array<AnalyticsEvent> } {
+  const events: Array<AnalyticsEvent> = [];
   return { name: 'memory', events, track: (e) => void events.push(e) };
 }

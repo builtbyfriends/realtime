@@ -1,25 +1,26 @@
-import { parseArgs, type ParseArgsOptionsConfig } from 'node:util';
+import { parseArgs } from 'node:util';
+import type { ParseArgsOptionsConfig } from 'node:util';
 import type { Manifest, ManifestEntry } from '@builtbyfriends/realtime';
 
 type Io = {
-  argv: string[];
+  argv: Array<string>;
   env: Record<string, string | undefined>;
   fetch?: typeof fetch;
   stdout: (s: string) => void;
   stderr: (s: string) => void;
 };
 
-type Prop = { type?: string | string[]; description?: string; enum?: unknown[]; items?: Prop; anyOf?: Prop[] };
+type Prop = { type?: string | Array<string>; description?: string; enum?: Array<unknown>; items?: Prop; anyOf?: Array<Prop> };
 
-const kebab = (s: string) => s.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/_/g, '-').toLowerCase();
+const kebab = (s: string) => s.replaceAll(/([a-z0-9])([A-Z])/g, '$1-$2').replaceAll('_', '-').toLowerCase();
 
 function typeOf(p: Prop): string {
   const t = Array.isArray(p.type) ? p.type.find((x) => x !== 'null') : p.type;
-  if (t) return t;
-  if (p.enum?.every((v) => typeof v === 'string')) return 'string';
+  if (t) {return t;}
+  if (p.enum?.every((v) => typeof v === 'string')) {return 'string';}
   if (p.anyOf) {
     const types = p.anyOf.map(typeOf).filter((x) => x !== 'null');
-    if (types.length === 1) return types[0]!;
+    if (types.length === 1) {return types[0]!;}
   }
   return 'json';
 }
@@ -42,10 +43,10 @@ function optionsFor(entry: ManifestEntry): ParseArgsOptionsConfig {
 // Decision: a flag parseArgs doesn't know takes the next word as its value, and so does a true/false
 // flag when that word is `true` or `false`, so `--org o1` reaches the unknown-flag message and
 // `--exact false` still works.
-function splitArgs(argv: string[], options: ParseArgsOptionsConfig) {
+function splitArgs(argv: Array<string>, options: ParseArgsOptionsConfig) {
   const { tokens } = parseArgs({ args: argv, options, strict: false, allowPositionals: true, tokens: true });
-  const words: string[] = [];
-  const flags: [string, string | true][] = [];
+  const words: Array<string> = [];
+  const flags: Array<[string, string | true]> = [];
   let open: { index: number; name: string } | undefined;
   for (const t of tokens) {
     if (t.kind === 'option') {
@@ -55,8 +56,8 @@ function splitArgs(argv: string[], options: ParseArgsOptionsConfig) {
     }
     const type = open && options[open.name]?.type;
     if (t.kind === 'positional' && open?.index === t.index - 1 && (!type || (type === 'boolean' && /^(true|false)$/.test(t.value)))) {
-      flags[flags.length - 1]![1] = t.value;
-    } else if (t.kind === 'positional') words.push(t.value);
+      flags.at(-1)![1] = t.value;
+    } else if (t.kind === 'positional') {words.push(t.value);}
     open = undefined;
   }
   return { words, flags };
@@ -65,21 +66,21 @@ function splitArgs(argv: string[], options: ParseArgsOptionsConfig) {
 function coerce(name: string, prop: Prop, raw: string | true): unknown {
   const t = typeOf(prop);
   if (t === 'boolean') {
-    if (raw === true || raw === 'true') return true;
-    if (raw === 'false') return false;
+    if (raw === true || raw === 'true') {return true;}
+    if (raw === 'false') {return false;}
     throw new UsageError(`--${name} takes true or false`);
   }
-  if (raw === true) throw new UsageError(`--${name} needs a value`);
+  if (raw === true) {throw new UsageError(`--${name} needs a value`);}
   if (t === 'number' || t === 'integer') {
     const n = Number(raw);
-    if (!Number.isFinite(n) || (t === 'integer' && !Number.isInteger(n))) throw new UsageError(`--${name} must be ${t === 'integer' ? 'an integer' : 'a number'}`);
+    if (!Number.isFinite(n) || (t === 'integer' && !Number.isInteger(n))) {throw new UsageError(`--${name} must be ${t === 'integer' ? 'an integer' : 'a number'}`);}
     return n;
   }
   if (t === 'string') {
-    if (prop.enum && !prop.enum.includes(raw)) throw new UsageError(`--${name} must be one of: ${prop.enum.join(', ')}`);
+    if (prop.enum && !prop.enum.includes(raw)) {throw new UsageError(`--${name} must be one of: ${prop.enum.join(', ')}`);}
     return raw;
   }
-  if (t === 'array' && !raw.trim().startsWith('[')) return [coerce(name, prop.items ?? {}, raw)];
+  if (t === 'array' && !raw.trim().startsWith('[')) {return [coerce(name, prop.items ?? {}, raw)];}
   try {
     return JSON.parse(raw);
   } catch {
@@ -87,14 +88,14 @@ function coerce(name: string, prop: Prop, raw: string | true): unknown {
   }
 }
 
-function inputFromFlags(entry: ManifestEntry, flags: [string, string | true][]): unknown {
-  const schema = (entry.input ?? {}) as { properties?: Record<string, Prop>; required?: string[] };
+function inputFromFlags(entry: ManifestEntry, flags: Array<[string, string | true]>): unknown {
+  const schema = (entry.input ?? {}) as { properties?: Record<string, Prop>; required?: Array<string> };
   const props = schema.properties ?? {};
   const byFlag = new Map(Object.keys(props).map((k) => [kebab(k), k]));
   let input: Record<string, unknown> = {};
   for (const [flag, raw] of flags) {
     if (flag === 'json') {
-      if (raw === true) throw new UsageError('--json needs a value');
+      if (raw === true) {throw new UsageError('--json needs a value');}
       try {
         input = { ...input, ...JSON.parse(raw) };
       } catch {
@@ -110,25 +111,25 @@ function inputFromFlags(entry: ManifestEntry, flags: [string, string | true][]):
     }
     const prop = props[key]!;
     if (negated) {
-      if (typeOf(prop) !== 'boolean') throw new UsageError(`--${flag} only works for true/false flags`);
+      if (typeOf(prop) !== 'boolean') {throw new UsageError(`--${flag} only works for true/false flags`);}
       input[key] = false;
       continue;
     }
     const value = coerce(flag, prop, raw);
     input[key] = typeOf(prop) === 'array' && Array.isArray(input[key]) && !(typeof raw === 'string' && raw.trim().startsWith('['))
-      ? [...(input[key] as unknown[]), ...(value as unknown[])]
+      ? [...(input[key] as Array<unknown>), ...(value as Array<unknown>)]
       : value;
   }
   const missing = (schema.required ?? []).filter((k) => input[k] === undefined);
-  if (missing.length) throw new UsageError(`missing ${missing.map((k) => `--${kebab(k)}`).join(', ')}`);
+  if (missing.length) {throw new UsageError(`missing ${missing.map((k) => `--${kebab(k)}`).join(', ')}`);}
   return entry.input ? input : undefined;
 }
 
 function commandHelp(entry: ManifestEntry): string {
-  const schema = (entry.input ?? {}) as { properties?: Record<string, Prop>; required?: string[] };
+  const schema = (entry.input ?? {}) as { properties?: Record<string, Prop>; required?: Array<string> };
   const lines = [`${entry.cli!.command}: ${entry.cli!.description}`, ''];
   const props = Object.entries(schema.properties ?? {});
-  if (!props.length) lines.push('  (no flags)');
+  if (!props.length) {lines.push('  (no flags)');}
   for (const [k, p] of props) {
     const req = schema.required?.includes(k) ? ' (required)' : '';
     const t = p.enum ? p.enum.join('|') : typeOf(p);
@@ -136,7 +137,7 @@ function commandHelp(entry: ManifestEntry): string {
   }
   lines.push('  --json <object>  pass the whole input as JSON');
   const errs = Object.entries(entry.errors);
-  if (errs.length) lines.push('', 'Errors:', ...errs.map(([c, s]) => `  ${c} (${s.status}) ${s.message}`));
+  if (errs.length) {lines.push('', 'Errors:', ...errs.map(([c, s]) => `  ${c} (${s.status}) ${s.message}`));}
   return lines.join('\n') + '\n';
 }
 
@@ -168,7 +169,7 @@ export async function run(io: Io): Promise<number> {
   const token = (take('token') as string | undefined) ?? io.env.REALTIME_TOKEN;
   const basePath = io.env.REALTIME_BASE_PATH ?? '/rpc';
   const help = take('help') !== undefined || words[0] === 'help';
-  if (words[0] === 'help') words.shift();
+  if (words[0] === 'help') {words.shift();}
 
   if (!url) {
     io.stderr('realtime: set --url or REALTIME_URL to your Worker, e.g. https://api.example.com\n');
@@ -178,10 +179,10 @@ export async function run(io: Io): Promise<number> {
   let manifest: Manifest;
   try {
     const res = await f(`${origin}${basePath}/manifest.json`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {throw new Error(`HTTP ${res.status}`);}
     manifest = (await res.json()) as Manifest;
-  } catch (e) {
-    io.stderr(`realtime: could not load ${origin}${basePath}/manifest.json: ${(e as Error).message}\n`);
+  } catch (error) {
+    io.stderr(`realtime: could not load ${origin}${basePath}/manifest.json: ${(error as Error).message}\n`);
     return 1;
   }
 
@@ -193,7 +194,7 @@ export async function run(io: Io): Promise<number> {
     .sort((a, b) => b.cli!.command.length - a.cli!.command.length)[0];
 
   if (!entry) {
-    if (words.length && !help) io.stderr(`realtime: unknown command "${words.join(' ')}"\n\n`);
+    if (words.length && !help) {io.stderr(`realtime: unknown command "${words.join(' ')}"\n\n`);}
     (words.length && !help ? io.stderr : io.stdout)(listHelp(manifest));
     return words.length && !help ? 2 : 0;
   }
@@ -211,9 +212,9 @@ export async function run(io: Io): Promise<number> {
   let input: unknown;
   try {
     input = inputFromFlags(entry, own.flags.filter(([k]) => !['url', 'token', 'help'].includes(k)));
-  } catch (e) {
-    if (!(e instanceof UsageError)) throw e;
-    io.stderr(`realtime: ${e.message}\n\n${commandHelp(entry)}`);
+  } catch (error) {
+    if (!(error instanceof UsageError)) throw error;
+    io.stderr(`realtime: ${error.message}\n\n${commandHelp(entry)}`);
     return 2;
   }
 
@@ -222,14 +223,14 @@ export async function run(io: Io): Promise<number> {
     headers: { 'content-type': 'application/json', 'x-realtime-surface': 'cli', ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: input === undefined ? '' : JSON.stringify(input),
   });
-  const body = (await res.json().catch(() => ({}))) as { data?: unknown; error?: { code: string; message: string; issues?: { path: string; message: string }[] } };
+  const body = (await res.json().catch(() => ({}))) as { data?: unknown; error?: { code: string; message: string; issues?: Array<{ path: string; message: string }> } };
   if (res.ok && !body.error) {
     io.stdout(JSON.stringify(body.data, null, 2) + '\n');
     return 0;
   }
   const err = body.error ?? { code: 'INTERNAL', message: `HTTP ${res.status}` };
   io.stderr(`error ${err.code}: ${err.message}\n`);
-  for (const i of err.issues ?? []) io.stderr(`  ${i.path ? `--${kebab(i.path.split('.')[0]!)}` : 'input'}: ${i.message}\n`);
-  if (res.status === 401) io.stderr('Set --token or REALTIME_TOKEN to an API token.\n');
+  for (const i of err.issues ?? []) {io.stderr(`  ${i.path ? `--${kebab(i.path.split('.')[0]!)}` : 'input'}: ${i.message}\n`);}
+  if (res.status === 401) {io.stderr('Set --token or REALTIME_TOKEN to an API token.\n');}
   return 1;
 }

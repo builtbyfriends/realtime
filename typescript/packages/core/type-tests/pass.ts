@@ -2,7 +2,8 @@
 // if one stops failing, tsc reports the unused directive and the build breaks.
 import { expectTypeOf } from 'expect-type';
 import { z } from 'zod';
-import { bearerAuth, createProcedures, defineRegistry, type InputOf, type OutputOf } from '@builtbyfriends/realtime';
+import { bearerAuth, createProcedures, defineRegistry } from '@builtbyfriends/realtime';
+import type { InputOf, OutputOf } from '@builtbyfriends/realtime';
 
 type Env = { DB: { get(id: string): string | null } };
 type User = { id: string; orgId: string };
@@ -31,7 +32,7 @@ export const getContact = procedure('contacts.get')
     expectTypeOf(env).toEqualTypeOf<Env>();
     expectTypeOf(fail).parameter(0).toEqualTypeOf<'NOT_FOUND'>();
     const row = env.DB.get(input.id);
-    if (!row) return fail('NOT_FOUND');
+    if (!row) {return fail('NOT_FOUND');}
     return { id: row + ctx.id };
   });
 expectTypeOf<InputOf<typeof getContact>>().toEqualTypeOf<{ orgId: string; id: string; limit?: number | undefined }>();

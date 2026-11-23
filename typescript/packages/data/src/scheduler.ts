@@ -1,4 +1,5 @@
-import { run, type DataStorage } from './storage.js';
+import { run } from './storage.js';
+import type { DataStorage } from './storage.js';
 
 export type ScheduledJob = { id: string; name: string; args: unknown; runAt: number; status: 'pending' | 'failed'; attempts: number; error: string | null };
 
@@ -35,7 +36,7 @@ export class Scheduler {
   }
 
   runAt(at: number | Date, name: string, args: unknown = null, options: { id?: string } = {}): string {
-    if (!this.knows(name)) throw new Error(`no job named "${name}"`);
+    if (!this.knows(name)) {throw new Error(`no job named "${name}"`);}
     const id = options.id ?? crypto.randomUUID();
     run(
       this.storage,
@@ -53,7 +54,7 @@ export class Scheduler {
   /** Cancels a job that has not run yet. Returns whether there was one. */
   cancel(id: string): boolean {
     const gone = run(this.storage, `DELETE FROM _jobs WHERE id=? RETURNING id`, id).length > 0;
-    if (gone) this.changed = true;
+    if (gone) {this.changed = true;}
     return gone;
   }
 
@@ -63,7 +64,7 @@ export class Scheduler {
   }
 
   /** @internal */
-  due(now: number, limit: number): ScheduledJob[] {
+  due(now: number, limit: number): Array<ScheduledJob> {
     return run<Row>(this.storage, `SELECT * FROM _jobs WHERE status='pending' AND run_at<=? ORDER BY run_at, rowid LIMIT ?`, now, limit).map(toJob);
   }
 
@@ -80,8 +81,8 @@ export class Scheduler {
   /** @internal Retries with exponential backoff, then parks the job as failed. */
   fail(job: ScheduledJob, error: string, maxAttempts: number, now: number): void {
     const attempts = job.attempts + 1;
-    if (attempts >= maxAttempts) run(this.storage, `UPDATE _jobs SET status='failed', attempts=?, error=? WHERE id=? AND run_at=?`, attempts, error, job.id, job.runAt);
-    else run(this.storage, `UPDATE _jobs SET run_at=?, attempts=?, error=? WHERE id=? AND run_at=?`, now + Math.min(2 ** attempts * 1000, 5 * 60_000), attempts, error, job.id, job.runAt);
+    if (attempts >= maxAttempts) {run(this.storage, `UPDATE _jobs SET status='failed', attempts=?, error=? WHERE id=? AND run_at=?`, attempts, error, job.id, job.runAt);}
+    else {run(this.storage, `UPDATE _jobs SET run_at=?, attempts=?, error=? WHERE id=? AND run_at=?`, now + Math.min(2 ** attempts * 1000, 5 * 60_000), attempts, error, job.id, job.runAt);}
   }
 }
 

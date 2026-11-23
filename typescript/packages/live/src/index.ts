@@ -25,7 +25,7 @@ export type QueryState<T> =
   | { status: 'error'; data: T | undefined; error: Error; fetching: boolean };
 
 export type Procs<R> = R extends { readonly '~procedures'?: infer P } ? NonNullable<P> : never;
-export type TopicMap<R> = { [N in keyof Procs<R> & string]?: (input: InputOf<Procs<R>[N]>) => string[] };
+export type TopicMap<R> = { [N in keyof Procs<R> & string]?: (input: InputOf<Procs<R>[N]>) => Array<string> };
 
 export type LiveOptions<R> = {
   /** Same shape as `createClient<R>(...)` from `@builtbyfriends/realtime-http/client`. */
@@ -44,7 +44,7 @@ export type LiveOptions<R> = {
 
 export type QueryOptions = {
   /** Topics for this query, replacing the defaults from `createLive`. */
-  topics?: string[];
+  topics?: Array<string>;
   /** False keeps the query idle (no fetch, no subscription), e.g. while an id is not known. */
   enabled?: boolean;
 };
@@ -73,7 +73,7 @@ type Entry = {
   key: string;
   name: string;
   input: unknown;
-  topics: string[];
+  topics: Array<string>;
   state: QueryState<any>;
   listeners: Set<() => void>;
   stops: Array<() => void>;
@@ -99,7 +99,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
   const entries = new Map<string, Entry>();
   const debounceMs = options.debounceMs ?? 50;
   const cacheMs = options.cacheMs ?? 30_000;
-  const topicsFor = options.topics as Record<string, ((input: unknown) => string[]) | undefined> | undefined;
+  const topicsFor = options.topics as Record<string, ((input: unknown) => Array<string>) | undefined> | undefined;
 
   async function fetchNow(e: Entry): Promise<void> {
     if (e.inFlight) {
@@ -110,14 +110,14 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     const generation = e.generation;
     do {
       e.dirty = false;
-      if (e.state.status !== 'loading') set(e, { ...e.state, fetching: true } as QueryState<any>);
+      if (e.state.status !== 'loading') {set(e, { ...e.state, fetching: true });}
       try {
         const data = await options.client.call(e.name, e.input);
-        if (generation !== e.generation) break;
+        if (generation !== e.generation) {break;}
         set(e, { status: 'ready', data, error: undefined, fetching: e.dirty });
-      } catch (err) {
+      } catch (error) {
         if (generation !== e.generation) break;
-        set(e, { status: 'error', data: e.state.data, error: err instanceof Error ? err : new Error(String(err)), fetching: e.dirty });
+        set(e, { status: 'error', data: e.state.data, error: error instanceof Error ? error : new Error(String(error)), fetching: e.dirty });
       }
     } while (e.dirty && generation === e.generation);
     e.inFlight = false;
@@ -125,7 +125,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
 
   function set(e: Entry, state: QueryState<any>) {
     e.state = state;
-    for (const l of [...e.listeners]) l();
+    for (const l of [...e.listeners]) {l();}
   }
 
   function schedule(e: Entry) {
@@ -135,7 +135,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
 
   function start(e: Entry) {
     clearTimeout(e.gc);
-    if (e.stops.length) return;
+    if (e.stops.length) {return;}
     const alive = { current: true };
     const gen = e.generation;
     void fetchNow(e);
@@ -144,7 +144,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
       for (const topic of e.topics) {
         Promise.resolve(transport.subscribe(topic, () => schedule(e))).then(
           (stop) => (alive.current && gen === e.generation ? e.stops.push(stop) : stop()),
-          (err) => console.error(`live: subscribing to "${topic}" failed`, err),
+          (error) => console.error(`live: subscribing to "${topic}" failed`, error),
         );
       }
       e.stops.push(transport.onReconnect(() => void fetchNow(e)));
@@ -163,11 +163,11 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
 
   function stop(e: Entry) {
     clearTimeout(e.timer);
-    for (const s of e.stops.splice(0)) s();
+    for (const s of e.stops.splice(0)) {s();}
     e.generation++;
     e.inFlight = false;
     e.gc = setTimeout(() => {
-      if (!e.listeners.size) entries.delete(e.key);
+      if (!e.listeners.size) {entries.delete(e.key);}
     }, cacheMs);
   }
 
@@ -190,10 +190,10 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
       getSnapshot: () => entry.state,
       subscribe(listener) {
         entry.listeners.add(listener);
-        if (enabled && entry.listeners.size === 1) start(entry);
+        if (enabled && entry.listeners.size === 1) {start(entry);}
         return () => {
           entry.listeners.delete(listener);
-          if (!entry.listeners.size) stop(entry);
+          if (!entry.listeners.size) {stop(entry);}
         };
       },
       refetch: () => fetchNow(entry),
@@ -218,7 +218,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
       update(queryName, queryInput, fn) {
         const prefix = `${queryName}:${stableKey(queryInput)}:`;
         for (const e of entries.values()) {
-          if (!e.key.startsWith(prefix) || e.state.data === undefined) continue;
+          if (!e.key.startsWith(prefix) || e.state.data === undefined) {continue;}
           const before = e.state;
           const guess = { ...before, data: fn(before.data) } as QueryState<any>;
           set(e, guess);
@@ -228,16 +228,16 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     });
     try {
       return await options.client.call(name, input);
-    } catch (err) {
+    } catch (error) {
       for (const { e, before, guess } of changed.reverse()) if (e.state === guess) set(e, before);
-      throw err;
+      throw error;
     } finally {
-      for (const { e } of changed) if (e.listeners.size) void fetchNow(e);
+      for (const { e } of changed) {if (e.listeners.size) void fetchNow(e);}
     }
   }
 
   /** Refetch every query that is currently being watched. */
-  function refetchAll(): Promise<void[]> {
+  function refetchAll(): Promise<Array<void>> {
     return Promise.all([...entries.values()].filter((e) => e.listeners.size).map((e) => fetchNow(e)));
   }
 
@@ -251,17 +251,17 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     fn: (data: OutputOf<Procs<R>[N]>, input: InputOf<Procs<R>[N]>) => OutputOf<Procs<R>[N]> | undefined,
   ): void {
     for (const e of entries.values()) {
-      if (e.name !== name || e.state.status !== 'ready') continue;
+      if (e.name !== name || e.state.status !== 'ready') {continue;}
       const next = fn(e.state.data, e.input as InputOf<Procs<R>[N]>);
-      if (next === undefined || next === e.state.data) continue;
+      if (next === undefined || next === e.state.data) {continue;}
       // Decision: a fetch on its way may have read before this change, so fetch once more after it and it can't win.
-      if (e.inFlight) e.dirty = true;
+      if (e.inFlight) {e.dirty = true;}
       set(e, { ...e.state, data: next });
     }
   }
 
   /** Refetches the watched answers of a procedure whose input passes `match`. */
-  function refetch<N extends keyof Procs<R> & string>(name: N, match: (input: InputOf<Procs<R>[N]>) => boolean = () => true): Promise<void[]> {
+  function refetch<N extends keyof Procs<R> & string>(name: N, match: (input: InputOf<Procs<R>[N]>) => boolean = () => true): Promise<Array<void>> {
     return Promise.all([...entries.values()].filter((e) => e.name === name && e.listeners.size && match(e.input as InputOf<Procs<R>[N]>)).map((e) => fetchNow(e)));
   }
 

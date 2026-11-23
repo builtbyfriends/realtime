@@ -8,7 +8,7 @@ const root = new URL('..', import.meta.url).pathname;
 const tmp = join(root, '..', 'demo-failure-tmp');
 const h = (title) => console.log(`\n${'='.repeat(78)}\n${title}\n${'='.repeat(78)}`);
 // oxlint-disable-next-line no-control-regex
-const clean = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replaceAll(tmp + '/', '').replaceAll(root, '');
+const clean = (s) => s.replaceAll(/\u001b\[[0-9;]*m/g, '').replaceAll(tmp + '/', '').replaceAll(root, '');
 
 function fresh() {
   rmSync(tmp, { recursive: true, force: true });
@@ -18,15 +18,15 @@ function fresh() {
 function run(cmd, args) {
   try {
     return { code: 0, out: clean(execFileSync(cmd, args, { cwd: tmp, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })) };
-  } catch (e) {
-    return { code: e.status, out: clean(`${e.stdout ?? ''}${e.stderr ?? ''}`) };
+  } catch (error) {
+    return { code: error.status, out: clean(`${error.stdout ?? ''}${error.stderr ?? ''}`) };
   }
 }
 const build = () => run('npx', ['vite', 'build', '--logLevel', 'error']);
 const realtimeMessage = (out) => {
   const lines = out.split('\n');
   const i = lines.findIndex((l) => l.includes('realtime found'));
-  if (i < 0) return out.trim();
+  if (i < 0) {return out.trim();}
   const rest = lines.slice(i + 1);
   const end = rest.findIndex((l) => !l.startsWith('  - '));
   return [lines[i].replace(/^.*?(realtime found)/, '$1'), ...rest.slice(0, end < 0 ? rest.length : end)].join('\n');
@@ -35,20 +35,20 @@ async function start() {
   const out = join(tmp, '.cloudflare/output/v0/workers/default');
   const config = JSON.parse(readFileSync(join(out, 'worker.config.json'), 'utf8'));
   delete config.assets;
-  for (const [k, v] of Object.entries(config.env)) if (v.type !== 'text' && v.type !== 'json') delete config.env[k];
+  for (const [k, v] of Object.entries(config.env)) {if (v.type !== 'text' && v.type !== 'json') delete config.env[k];}
   delete config.manifest.type;
   config.manifest.modulesRoot = join(out, 'bundle');
   for (const k of Object.keys(config.manifest.modules)) {
-    if (k.endsWith('.map')) delete config.manifest.modules[k];
-    else config.manifest.modules[k].contents = readFileSync(join(out, 'bundle', k), 'utf8');
+    if (k.endsWith('.map')) {delete config.manifest.modules[k];}
+    else {config.manifest.modules[k].contents = readFileSync(join(out, 'bundle', k), 'utf8');}
   }
   const logs = [];
   const mf = new Miniflare({ log: new NoOpLog(), handleStructuredLogs: (l) => logs.push(l.message), workers: [{ config }] });
   try {
     await mf.ready;
     return 'Worker started.';
-  } catch (e) {
-    const uncaught = logs.find((m) => m.includes('Uncaught')) ?? String(e.message ?? e);
+  } catch (error) {
+    const uncaught = logs.find((m) => m.includes('Uncaught')) ?? String(error.message ?? error);
     return `Worker failed to start, so Cloudflare would reject the deploy:\n${uncaught.replace(/^service \S+: /, '')}`;
   } finally {
     await mf.dispose().catch(() => {});

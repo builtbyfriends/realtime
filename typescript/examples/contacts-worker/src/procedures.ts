@@ -43,7 +43,7 @@ export const getContact = procedure('contacts.get')
   .noAiTool({ reason: 'Returns PII; agents use contacts.search, which redacts email' })
   .handler(({ input, fail }) => {
     const c = contacts.get(input.id);
-    if (!c || c.orgId !== input.orgId) return fail('NOT_FOUND');
+    if (!c || c.orgId !== input.orgId) {return fail('NOT_FOUND');}
     return c;
   });
 
@@ -74,7 +74,7 @@ export const deleteContact = procedure('contacts.delete')
   .aiTool({ description: 'Delete a contact permanently', needsApproval: true })
   .handler(({ input, ctx, fail }) => {
     const c = contacts.get(input.id);
-    if (!c || c.orgId !== ctx.orgId) return fail('NOT_FOUND');
+    if (!c || c.orgId !== ctx.orgId) {return fail('NOT_FOUND');}
     contacts.delete(input.id);
     return { deleted: true };
   });

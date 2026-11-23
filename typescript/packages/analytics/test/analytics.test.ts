@@ -21,7 +21,7 @@ describe('analytics providers', () => {
 
   it('captures to PostHog, without person profiles for anonymous calls', async () => {
     const fetch = vi.fn(async () => new Response('{}'));
-    await posthog({ apiKey: (env) => env.KEY, fetch }).track({ ...event, actorId: undefined } as any, { KEY: 'phc_x' });
+    await posthog({ apiKey: (env) => env.KEY, fetch }).track({ ...event, actorId: undefined }, { KEY: 'phc_x' });
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://us.i.posthog.com/i/v0/e/');
     expect(JSON.parse(init.body as string)).toMatchObject({

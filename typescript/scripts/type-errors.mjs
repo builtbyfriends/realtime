@@ -8,10 +8,10 @@ const expectedPath = `${root}${dir}/messages.expected.txt`;
 let out = '';
 try {
   execFileSync(`${root}node_modules/.bin/tsc`, ['-p', `${dir}/tsconfig.json`, '--pretty', 'false'], { cwd: root, encoding: 'utf8' });
-} catch (e) {
-  out = e.stdout;
+} catch (error) {
+  out = error.stdout;
 }
-const actual = out.replace(/\r\n/g, '\n').trim() + '\n';
+const actual = out.replaceAll('\r\n', '\n').trim() + '\n';
 if (process.argv.includes('--update') || !existsSync(expectedPath)) {
   writeFileSync(expectedPath, actual);
   console.log(`wrote ${dir}/messages.expected.txt (${actual.split('\n').filter((l) => l.includes('error TS')).length} errors)`);

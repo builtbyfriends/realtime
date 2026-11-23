@@ -8,8 +8,8 @@ run({
   stderr: (s) => process.stderr.write(s),
 }).then(
   (code) => process.exit(code),
-  (e) => {
-    process.stderr.write(`realtime: ${(e as Error).message}\n`);
+  (error) => {
+    process.stderr.write(`realtime: ${(error as Error).message}\n`);
     process.exit(1);
   },
 );

@@ -22,7 +22,7 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 
 /** Turns a call result into the wire format: `{ data }` on success, `{ error: { code, message, issues? } }` otherwise. */
 export function toResponse(result: CallResult): Response {
-  if (result.ok) return json({ data: result.value });
+  if (result.ok) {return json({ data: result.value });}
   const { code, message, issues, status } = result;
   return json({ error: { code, message, ...(issues ? { issues } : {}) } }, status, status === 401 ? { 'www-authenticate': 'Bearer' } : {});
 }
@@ -43,13 +43,13 @@ export function rpcHandler(registry: Registry<any>, options: RpcHandlerOptions =
 
   const handler = async (request: Request, env: unknown, ctx: ExecutionContextLike) => {
     const path = new URL(request.url).pathname;
-    if (!matches(request)) return json({ error: { code: 'NOT_FOUND_PROCEDURE', message: 'Not found' } }, 404);
+    if (!matches(request)) {return json({ error: { code: 'NOT_FOUND_PROCEDURE', message: 'Not found' } }, 404);}
     const rest = path.slice(base.length + 1);
 
-    if (request.method === 'GET' && rest === 'manifest.json' && manifest) return new Response(manifest, { headers: { 'content-type': 'application/json' } });
-    if (request.method === 'GET' && rest === 'openapi.json' && openapi) return new Response(openapi, { headers: { 'content-type': 'application/json' } });
-    if (!registry.procedures.has(rest)) return toResponse({ ok: false, status: 404, code: 'NOT_FOUND_PROCEDURE', message: BUILTIN_ERRORS.NOT_FOUND_PROCEDURE.message });
-    if (request.method !== 'POST') return json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Use POST' } }, 405, { allow: 'POST' });
+    if (request.method === 'GET' && rest === 'manifest.json' && manifest) {return new Response(manifest, { headers: { 'content-type': 'application/json' } });}
+    if (request.method === 'GET' && rest === 'openapi.json' && openapi) {return new Response(openapi, { headers: { 'content-type': 'application/json' } });}
+    if (!registry.procedures.has(rest)) {return toResponse({ ok: false, status: 404, code: 'NOT_FOUND_PROCEDURE', message: BUILTIN_ERRORS.NOT_FOUND_PROCEDURE.message });}
+    if (request.method !== 'POST') {return json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Use POST' } }, 405, { allow: 'POST' });}
 
     let input: unknown = undefined;
     const text = await request.text();
@@ -91,8 +91,8 @@ export function openApi(registry: Registry<any>, basePath = '/rpc', info = { tit
       '400': { description: 'INVALID_INPUT', content: { 'application/json': { schema: errorBody } } },
       '500': { description: 'INTERNAL', content: { 'application/json': { schema: errorBody } } },
     };
-    if (d.authn.kind === 'auth') responses['401'] = { description: 'UNAUTHENTICATED', content: { 'application/json': { schema: errorBody } } };
-    if (d.authz.kind === 'policy') responses['403'] = { description: 'FORBIDDEN', content: { 'application/json': { schema: errorBody } } };
+    if (d.authn.kind === 'auth') {responses['401'] = { description: 'UNAUTHENTICATED', content: { 'application/json': { schema: errorBody } } };}
+    if (d.authz.kind === 'policy') {responses['403'] = { description: 'FORBIDDEN', content: { 'application/json': { schema: errorBody } } };}
     for (const [code, spec] of Object.entries(p.errors)) {
       const key = String(spec.status);
       const prev = responses[key] as { description: string } | undefined;

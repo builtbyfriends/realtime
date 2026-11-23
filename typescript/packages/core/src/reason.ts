@@ -26,10 +26,10 @@ export type CheckReason<R extends string> = string extends R
       : ReasonMessage;
 
 export function reasonProblem(reason: unknown): string | null {
-  if (typeof reason !== 'string') return 'opt-out needs a reason string';
-  const r = reason.trim().replace(/\s+/g, ' ');
+  if (typeof reason !== 'string') {return 'opt-out needs a reason string';}
+  const r = reason.trim().replaceAll(/\s+/g, ' ');
   const lower = r.toLowerCase().replace(/[.!]+$/, '');
-  if ((JUNK_REASONS as readonly string[]).includes(lower)) return `"${reason}" is a placeholder, not a reason`;
-  if (r.length < 12 || r.split(' ').length < 3) return `"${reason}" is too short: say why in at least three words`;
+  if ((JUNK_REASONS as ReadonlyArray<string>).includes(lower)) {return `"${reason}" is a placeholder, not a reason`;}
+  if (r.length < 12 || r.split(' ').length < 3) {return `"${reason}" is too short: say why in at least three words`;}
   return null;
 }

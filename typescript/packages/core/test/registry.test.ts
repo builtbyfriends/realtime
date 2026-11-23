@@ -6,7 +6,7 @@ import { defineRegistry, procedure } from '@builtbyfriends/realtime';
 import { memoryAnalytics } from '@builtbyfriends/realtime-analytics';
 import { getContact, ping, purge } from './fixtures.js';
 
-const R = (why: string) => ({ reason: why as string });
+const R = (why: string) => ({ reason: why });
 // Decision: built with plain strings, the way untyped JS would.
 const full = (name: string, overrides: (b: any) => any = (b) => b) =>
   overrides(
@@ -47,8 +47,8 @@ describe('registry load-time checks (the deploy gate)', () => {
     try {
       defineRegistry([one, one, ping, ping]);
       expect.unreachable();
-    } catch (e) {
-      const msg = (e as Error).message;
+    } catch (error) {
+      const msg = (error as Error).message;
       expect(msg).toMatch(/problem\(s\)/);
       expect(msg).toContain('"dup": mcp opt-out');
       expect(msg).toContain('"ping": registered twice');

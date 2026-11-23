@@ -10,9 +10,9 @@ function setup() {
   const data = defineData({ schema, functions: ({ mutation }) => ({ add: mutation((ctx, a: { room: string; text: string }) => ctx.db.insert('notes', a)) }) });
   const engine = data.engine(memoryStorage());
   engine.init();
-  const all: { tags: string[]; ws: ReturnType<typeof fakeSocket> }[] = [];
+  const all: Array<{ tags: string[]; ws: ReturnType<typeof fakeSocket> }> = [];
   const state = {
-    acceptWebSocket: (ws: any, tags: string[] = []) => void all.push({ ws, tags }),
+    acceptWebSocket: (ws: any, tags: Array<string> = []) => void all.push({ ws, tags }),
     getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
   };
   const sockets = new SyncSockets(state, (g, a, l) => engine.pull(g, a, l));
@@ -23,7 +23,7 @@ function setup() {
 
 function fakeSocket() {
   let attachment: unknown = null;
-  const sent: any[] = [];
+  const sent: Array<any> = [];
   return { sent, send: (m: string) => void sent.push(JSON.parse(m)), serializeAttachment: (v: unknown) => void (attachment = v), deserializeAttachment: () => attachment };
 }
 
@@ -56,7 +56,7 @@ describe('sync sockets', () => {
 });
 
 describe('watching groups', () => {
-  type Note = { room: string; text: string; likes: string[] };
+  type Note = { room: string; text: string; likes: Array<string> };
   const schema = defineSchema({
     notes: table<Note>({
       sync: { group: (n) => `room:${n.room}`, view: (n, { actor }) => (n.room === 'secret' ? null : { text: n.text, mine: n.likes.includes(actor) }) },
@@ -72,7 +72,7 @@ describe('watching groups', () => {
         join: mutation((ctx, a: { room: string; user: string }) => void ctx.db.insert('members', a)),
         leave: mutation((ctx, a: { room: string; user: string }) => {
           const row = ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', a.user).eq('room', a.room)).first();
-          if (row) ctx.db.delete('members', row._id);
+          if (row) {ctx.db.delete('members', row._id);}
         }),
       }),
       syncAccess: (ctx, actor, group) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', group.slice(5))).first(),
@@ -80,9 +80,9 @@ describe('watching groups', () => {
     });
     const engine = data.engine(memoryStorage());
     engine.init();
-    const all: { tags: string[]; ws: ReturnType<typeof fakeSocket> }[] = [];
+    const all: Array<{ tags: string[]; ws: ReturnType<typeof fakeSocket> }> = [];
     const state = {
-      acceptWebSocket: (ws: any, tags: string[] = []) => void all.push({ ws, tags }),
+      acceptWebSocket: (ws: any, tags: Array<string> = []) => void all.push({ ws, tags }),
       getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
     };
     const sockets = new SyncSockets(state, { pull: (_a, g, after, l) => engine.pull(g, after, l), view: (a, c) => engine.view(a, c), access: (a, g) => engine.access(a, g) });
@@ -141,17 +141,17 @@ describe('live topics over the socket', () => {
         join: mutation((ctx, a: { room: string; user: string }) => void ctx.db.insert('members', a)),
         leave: mutation((ctx, a: { room: string; user: string }) => {
           const row = ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', a.user).eq('room', a.room)).first();
-          if (row) ctx.db.delete('members', row._id);
+          if (row) {ctx.db.delete('members', row._id);}
         }),
       }),
-      syncTopics: (ctx, actor, topic) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', topic.split(':')[2]!)).first(),
+      syncTopics: (ctx, actor, topic) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', topic.split(':')[2])).first(),
       syncRecheck: (topics) => topics.includes('members'),
     });
     const engine = data.engine(memoryStorage());
     engine.init();
-    const all: { tags: string[]; ws: ReturnType<typeof fakeSocket> }[] = [];
+    const all: Array<{ tags: string[]; ws: ReturnType<typeof fakeSocket> }> = [];
     const state = {
-      acceptWebSocket: (ws: any, tags: string[] = []) => void all.push({ ws, tags }),
+      acceptWebSocket: (ws: any, tags: Array<string> = []) => void all.push({ ws, tags }),
       getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
     };
     const sockets = new SyncSockets(state, {
@@ -204,17 +204,17 @@ describe('live queries over the socket', () => {
         join: mutation((ctx, a: { room: string; user: string }) => void ctx.db.insert('members', a)),
         leave: mutation((ctx, a: { room: string; user: string }) => {
           const row = ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', a.user).eq('room', a.room)).first();
-          if (row) ctx.db.delete('members', row._id);
+          if (row) {ctx.db.delete('members', row._id);}
         }),
         listPins: query((ctx, a: { room: string; userId: string }) => ctx.db.query('pins').withIndex('by_room', (q) => q.eq('room', a.room)).collect()),
       }),
-      syncTopics: (ctx, actor, topic) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', topic.split(':')[2]!)).first(),
+      syncTopics: (ctx, actor, topic) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', topic.split(':')[2])).first(),
       syncRecheck: (topics) => topics.includes('members'),
       syncQuery: (actor, name, input) => (name === 'pins.list' ? { fn: 'listPins', args: { ...(input as object), userId: actor }, output } : null),
     });
     const engine = data.engine(memoryStorage());
     engine.init();
-    const all: ReturnType<typeof fakeSocket>[] = [];
+    const all: Array<ReturnType<typeof fakeSocket>> = [];
     const sockets = new SyncSockets(
       { acceptWebSocket: (ws: any) => void all.push(ws), getWebSockets: () => all },
       { pull: (_a, g, after, l) => engine.pull(g, after, l), topicAccess: (a, t) => engine.topicAccess(a, t), query: (a, n, i) => engine.liveQuery(a, n, i) },

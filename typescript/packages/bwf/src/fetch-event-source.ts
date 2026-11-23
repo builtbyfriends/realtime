@@ -50,8 +50,8 @@ export function fetchEventSource(options: FetchEventSourceOptions): FetchEventSo
     }
 
     #emit(type: string, event: Record<string, unknown> = {}) {
-      if (this.#closed) return;
-      for (const listener of [...(this.#listeners.get(type) ?? [])]) listener({ type, ...event });
+      if (this.#closed) {return;}
+      for (const listener of [...(this.#listeners.get(type) ?? [])]) {listener({ type, ...event });}
     }
 
     async #run() {
@@ -59,7 +59,7 @@ export function fetchEventSource(options: FetchEventSourceOptions): FetchEventSo
         const headers = new Headers(typeof options.headers === 'function' ? await options.headers() : options.headers);
         headers.set('accept', 'text/event-stream');
         const response = await (options.fetch ?? fetch)(this.url, { headers, signal: this.#abort.signal, cache: 'no-store' });
-        if (!response.ok || !response.body) throw new Error(`live: stream answered ${response.status}`);
+        if (!response.ok || !response.body) {throw new Error(`live: stream answered ${response.status}`);}
         this.#emit('open');
         const reader = response.body
           .pipeThrough(new TextDecoderStream())
@@ -67,7 +67,7 @@ export function fetchEventSource(options: FetchEventSourceOptions): FetchEventSo
           .getReader();
         for (;;) {
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done) {break;}
           this.#emit(value.event || 'message', { data: value.data });
         }
         this.#emit('error');

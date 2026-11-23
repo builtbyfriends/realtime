@@ -29,10 +29,10 @@ export const getContact = procedure('contacts.get')
   .cli({ command: 'contacts get', description: 'Print one contact' })
   .aiTool({ description: 'Fetch one contact', needsApproval: false })
   .handler(({ input, ctx, fail }) => {
-    if (input.id === 'missing') return fail('NOT_FOUND');
-    if (input.id === 'gone') return fail('GONE', 'Deleted on Tuesday');
-    if (input.id === 'boom') throw new Error('database exploded');
-    if (input.id === 'badshape') return { id: 1 } as any;
+    if (input.id === 'missing') {return fail('NOT_FOUND');}
+    if (input.id === 'gone') {return fail('GONE', 'Deleted on Tuesday');}
+    if (input.id === 'boom') {throw new Error('database exploded');}
+    if (input.id === 'badshape') {return { id: 1 } as any;}
     return { id: input.id, owner: ctx.id };
   });
 

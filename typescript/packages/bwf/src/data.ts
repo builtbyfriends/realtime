@@ -15,9 +15,9 @@ type Publisher = { withEnv(env: any): { publish(topic: string, data: unknown, op
  *   defineData({ ..., onCommit: publishTopics(live, { only: policy.subscribable }) })
  */
 export function publishTopics(live: Publisher, options: { only?: (topic: string) => boolean } = {}) {
-  return async (topics: string[], env: unknown) => {
+  return async (topics: Array<string>, env: unknown) => {
     const wanted = options.only ? topics.filter(options.only) : topics;
-    if (!wanted.length) return;
+    if (!wanted.length) {return;}
     const stream = live.withEnv(env);
     await Promise.all(wanted.map((topic) => stream.publish(topic, null, { type: 'changed' })));
   };
@@ -27,7 +27,7 @@ export type TopicContext = { topic: string; user: unknown; owner: string | null;
 export type TopicRule = {
   /** Matched against the whole topic. Capture groups are passed to `allow`. */
   pattern: RegExp;
-  allow: (match: string[], ctx: TopicContext) => boolean | Promise<boolean>;
+  allow: (match: Array<string>, ctx: TopicContext) => boolean | Promise<boolean>;
 };
 
 /**
@@ -39,7 +39,7 @@ export type TopicRule = {
  *     { pattern: /^messages:channel:(.+)$/, allow: ([, channel], ctx) => canRead(ctx.user, channel) },
  *   ]) })
  */
-export function topicPolicy(rules: TopicRule[]) {
+export function topicPolicy(rules: Array<TopicRule>) {
   const matches = (pattern: RegExp, topic: string) => {
     const m = pattern.exec(topic);
     return m && m[0] === topic ? m : null;
@@ -47,7 +47,7 @@ export function topicPolicy(rules: TopicRule[]) {
   const policy = async (ctx: TopicContext): Promise<Response | void> => {
     for (const { pattern, allow } of rules) {
       const m = matches(pattern, ctx.topic);
-      if (m && (await allow([...m], ctx))) return;
+      if (m && (await allow([...m], ctx))) {return;}
     }
     return new Response('Forbidden', { status: 403 });
   };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { defineData, defineSchema, table, type ChangeBatch } from '../src/index.js';
+import { defineData, defineSchema, table } from '../src/index.js';
+import type { ChangeBatch } from '../src/index.js';
 import { memoryStorage } from './storage.js';
 
 type Note = { room: string; text: string; secret?: string };
@@ -13,7 +14,7 @@ const schema = defineSchema({
 });
 
 function setup() {
-  const batches: ChangeBatch[] = [];
+  const batches: Array<ChangeBatch> = [];
   const data = defineData({
     schema,
     functions: ({ mutation }) => ({
@@ -49,11 +50,11 @@ describe('change index', () => {
     const id = await m('add', { room: 'a', text: 'hello' });
     await tick();
     expect(batches).toHaveLength(1);
-    expect(batches[0]!.seq).toBe(1);
-    expect(batches[0]!.changes[0]!.doc).toEqual({ _id: id, _creationTime: expect.any(Number), room: 'a', text: 'hello' });
+    expect(batches[0].seq).toBe(1);
+    expect(batches[0].changes[0].doc).toEqual({ _id: id, _creationTime: expect.any(Number), room: 'a', text: 'hello' });
     const pulled = engine.pull(['room:a'], 0);
     expect(pulled).toMatchObject({ seq: 1, more: false, changes: [{ table: 'notes', id, group: 'room:a' }] });
-    expect(pulled.changes[0]!.doc).not.toHaveProperty('secret');
+    expect(pulled.changes[0].doc).not.toHaveProperty('secret');
   });
 
   it('keeps one row per document, however often it changes', async () => {
@@ -72,7 +73,7 @@ describe('change index', () => {
     const id = await m('add', { room: 'a', text: 'hello' });
     await m('edit', { id, room: 'b' });
     expect(engine.pull(['room:a'], 1).changes).toEqual([{ table: 'notes', id, group: 'room:a', doc: null }]);
-    expect(engine.pull(['room:b'], 0).changes[0]!.doc).toMatchObject({ room: 'b' });
+    expect(engine.pull(['room:b'], 0).changes[0].doc).toMatchObject({ room: 'b' });
     expect(engine.pull(['room:a'], 0).changes).toEqual([]);
   });
 
@@ -96,7 +97,7 @@ describe('change index', () => {
 
   it('pages on whole commits', async () => {
     const { engine, m } = setup();
-    for (let i = 0; i < 5; i++) await m('add', { room: 'a', text: `n${i}` });
+    for (let i = 0; i < 5; i++) {await m('add', { room: 'a', text: `n${i}` });}
     const first = engine.pull(['room:a'], 0, 2);
     expect(first).toMatchObject({ seq: 2, more: true });
     const rest = engine.pull(['room:a'], first.seq, 10);
@@ -106,12 +107,12 @@ describe('change index', () => {
 });
 
 describe('documents in several groups', () => {
-  const schema = defineSchema({ chats: table<{ people: string[]; text: string }>({ sync: { group: (c) => c.people.map((p) => `user:${p}`) } }) });
+  const schema = defineSchema({ chats: table<{ people: Array<string>; text: string }>({ sync: { group: (c) => c.people.map((p) => `user:${p}`) } }) });
   const data = defineData({
     schema,
     functions: ({ mutation }) => ({
-      add: mutation((ctx, a: { people: string[]; text: string }) => ctx.db.insert('chats', a)),
-      set: mutation((ctx, a: { id: string; people: string[] }) => void ctx.db.patch('chats', a.id, { people: a.people })),
+      add: mutation((ctx, a: { people: Array<string>; text: string }) => ctx.db.insert('chats', a)),
+      set: mutation((ctx, a: { id: string; people: Array<string> }) => void ctx.db.patch('chats', a.id, { people: a.people })),
     }),
   });
 
@@ -123,6 +124,6 @@ describe('documents in several groups', () => {
     expect(engine.pull(['user:bo'], 0).changes).toHaveLength(1);
     await engine.run('mutation', 'set', { id, people: ['ann'] });
     expect(engine.pull(['user:bo'], 1).changes).toEqual([{ table: 'chats', id, group: 'user:bo', doc: null }]);
-    expect(engine.pull(['user:ann'], 1).changes[0]!.doc).toMatchObject({ people: ['ann'] });
+    expect(engine.pull(['user:ann'], 1).changes[0].doc).toMatchObject({ people: ['ann'] });
   });
 });

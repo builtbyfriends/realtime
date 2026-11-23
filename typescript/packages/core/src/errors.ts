@@ -26,7 +26,7 @@ export type Failure = {
   status: number;
   code: string;
   message: string;
-  issues?: { message: string; path: string }[];
+  issues?: Array<{ message: string; path: string }>;
 };
 
 export function builtinFailure(code: BuiltinErrorCode, issues?: Failure['issues']): Failure {

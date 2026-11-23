@@ -7,7 +7,7 @@ export class RpcError<Code extends string = string> extends Error {
     readonly code: Code | 'UNAUTHENTICATED' | 'FORBIDDEN' | 'INVALID_INPUT' | 'NOT_FOUND_PROCEDURE' | 'INTERNAL',
     message: string,
     readonly status: number,
-    readonly issues?: { message: string; path: string }[],
+    readonly issues?: Array<{ message: string; path: string }>,
   ) {
     super(message);
     this.name = 'RpcError';

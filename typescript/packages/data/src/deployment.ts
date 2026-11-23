@@ -1,6 +1,8 @@
 import { Db, DbReader, syncSchema } from './db.js';
-import { currentEpoch, pull, syncChanges, type Change, type ChangeBatch, type PullResult } from './changes.js';
-import { SyncSockets, type QueryAnswer, type SocketIdentity } from './sockets.js';
+import { currentEpoch, pull, syncChanges } from './changes.js';
+import type { Change, ChangeBatch, PullResult } from './changes.js';
+import { SyncSockets } from './sockets.js';
+import type { QueryAnswer, SocketIdentity } from './sockets.js';
 
 /** The header the door sets on a sync socket request: JSON `{ actor, groups }`. See `syncRequest`. */
 export const SYNC_HEADER = 'x-realtime-sync';
@@ -14,7 +16,8 @@ export function syncRequest(request: Request, who: SocketIdentity): Request {
   headers.set(SYNC_HEADER, JSON.stringify({ actor: who.actor, groups: who.groups }));
   return new Request(request.url, { method: request.method, headers });
 }
-import { Scheduler, syncJobs, type ScheduledJob } from './scheduler.js';
+import { Scheduler, syncJobs } from './scheduler.js';
+import type { ScheduledJob } from './scheduler.js';
 import type { Schema } from './schema.js';
 import type { DataStorage } from './storage.js';
 
@@ -68,7 +71,7 @@ export type DataDefinition<S extends Schema, F extends Record<string, AnyFn>, J 
    * answers. Errors are logged, never thrown: live delivery is at most once, so clients
    * refetch on reconnect anyway.
    */
-  onCommit?: (topics: string[], env: any) => void | Promise<void>;
+  onCommit?: (topics: Array<string>, env: any) => void | Promise<void>;
   /**
    * Called after a mutation commits, with what changed in synced tables (`sync` on the table): one position for the
    * commit and each document as devices see it. Send it to the devices in those groups. Like `onCommit`, it's started and
@@ -84,7 +87,7 @@ export type DataDefinition<S extends Schema, F extends Record<string, AnyFn>, J 
    * Whether a commit may have changed who can read what, from the topics it touched (a member left, a channel went
    * private). When it says yes, each open socket's groups are checked again with `syncAccess`.
    */
-  syncRecheck?: (topics: string[]) => boolean;
+  syncRecheck?: (topics: Array<string>) => boolean;
   /**
    * Whether `actor` may hear live topic `topic` over its sync socket. A device that listens gets a `topics` message after
    * each commit that touches one, and refetches what reads it, as it would from a live stream. Without it, every listen
@@ -106,9 +109,9 @@ export type DataDefinition<S extends Schema, F extends Record<string, AnyFn>, J 
 /** How the object answers one live query over the socket. */
 export type SyncQueryPlan = { fn: string; args: unknown; output?: StandardSchema };
 type StandardSchema = { '~standard': { validate(value: unknown): unknown } };
-type Validated = { value?: unknown; issues?: readonly unknown[] };
+type Validated = { value?: unknown; issues?: ReadonlyArray<unknown> };
 
-type Stub = { run(kind: string, name: string, args: unknown): Promise<any>; job(id: string): Promise<ScheduledJob | null>; pull(groups: string[], after: number, limit?: number): Promise<PullResult> };
+type Stub = { run(kind: string, name: string, args: unknown): Promise<any>; job(id: string): Promise<ScheduledJob | null>; pull(groups: Array<string>, after: number, limit?: number): Promise<PullResult> };
 type Namespace = { idFromName(name: string): unknown; get(id: any): any };
 
 export type Data<S extends Schema, F extends Record<string, AnyFn>, _J extends Record<string, JobFn<F>>> = {
@@ -120,7 +123,7 @@ export type Data<S extends Schema, F extends Record<string, AnyFn>, _J extends R
    * with `DurableObject` from "cloudflare:workers". Bind it and run a migration for it
    * like any SQLite-backed Durable Object.
    */
-  durableObject<B extends abstract new (...args: any[]) => object>(Base: B): new (...args: ConstructorParameters<B>) => InstanceType<B> & DataObject;
+  durableObject<B extends abstract new (...args: Array<any>) => object>(Base: B): new (...args: ConstructorParameters<B>) => InstanceType<B> & DataObject;
   /** A typed client for the one object that holds the deployment's data. */
   client(namespace: Namespace, name?: string): DataClient<F>;
   /** For tests and in-process use: run against any storage that satisfies `DataStorage`. */
@@ -130,9 +133,9 @@ export type Data<S extends Schema, F extends Record<string, AnyFn>, _J extends R
 export interface DataObject {
   run(kind: 'query' | 'mutation', name: string, args: unknown): Promise<unknown>;
   /** Changes the sync groups an actor's open sockets may read, after they join or leave something. */
-  regroup(actor: string, groups: string[]): Promise<void>;
+  regroup(actor: string, groups: Array<string>): Promise<void>;
   /** What changed in these sync groups after `after`. Check the caller may read each group before calling. */
-  pull(groups: string[], after: number, limit?: number): Promise<PullResult>;
+  pull(groups: Array<string>, after: number, limit?: number): Promise<PullResult>;
   job(id: string): Promise<ScheduledJob | null>;
   alarm(): Promise<void>;
 }
@@ -143,7 +146,7 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
   const functions = def.functions({ query: (run) => ({ kind: 'query', run }) as any, mutation: (run) => ({ kind: 'mutation', run }) as any });
   const jobs = def.jobs?.((run, options) => (options?.concurrent ? Object.assign((ctx: any, args: any) => run(ctx, args), { concurrent: true }) : run)) ?? ({} as J);
   const resolved = { ...def, functions, jobs };
-  const engine = (storage: DataStorage, env: unknown = {}) => new Engine(storage, env, resolved as any);
+  const engine = (storage: DataStorage, env: unknown = {}) => new Engine(storage, env, resolved);
 
   return {
     schema: def.schema,
@@ -151,10 +154,10 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
     engine,
     durableObject(Base) {
       // oxlint-disable-next-line anti-slop/no-chained-type-assertions
-      return class extends (Base as unknown as new (...args: any[]) => object) {
+      return class extends (Base as unknown as new (...args: Array<any>) => object) {
         #engine: Engine;
         #sockets: SyncSockets;
-        constructor(...args: any[]) {
+        constructor(...args: Array<any>) {
           super(...args);
           const [ctx, env] = args as [{ storage: DataStorage; blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T> } & ConstructorParameters<typeof SyncSockets>[0], unknown];
           const own = (this.#engine = engine(ctx.storage, env));
@@ -181,10 +184,10 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
         job(id: string) {
           return Promise.resolve(this.#engine.scheduler().get(id));
         }
-        pull(groups: string[], after: number, limit?: number) {
+        pull(groups: Array<string>, after: number, limit?: number) {
           return Promise.resolve(this.#engine.pull(groups, after, limit));
         }
-        regroup(actor: string, groups: string[]) {
+        regroup(actor: string, groups: Array<string>) {
           this.#sockets.regroup(actor, groups);
           return Promise.resolve();
         }
@@ -194,7 +197,7 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
             const base = (Base.prototype as { fetch?: (r: Request) => Response | Promise<Response> }).fetch;
             return base ? base.call(this, request) : new Response('not found', { status: 404 });
           }
-          if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response('expected a WebSocket', { status: 426 });
+          if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {return new Response('expected a WebSocket', { status: 426 });}
           // Decision: read WebSocketPair from globalThis, because this package doesn't load the Workers types.
           // oxlint-disable-next-line anti-slop/no-chained-type-assertions
           const Pair = (globalThis as unknown as { WebSocketPair: new () => [unknown, unknown] }).WebSocketPair;
@@ -203,12 +206,12 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
           return new Response(null, { status: 101, webSocket: device } as ResponseInit);
         }
         webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-          if (this.#sockets.message(ws as never, message)) return;
+          if (this.#sockets.message(ws as never, message)) {return;}
           return (Base.prototype as { webSocketMessage?: (ws: WebSocket, m: string | ArrayBuffer) => unknown }).webSocketMessage?.call(this, ws, message);
         }
         webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-          const base = (Base.prototype as { webSocketClose?: (...a: unknown[]) => unknown }).webSocketClose;
-          if (base) return base.call(this, ws, code, reason, wasClean);
+          const base = (Base.prototype as { webSocketClose?: (...a: Array<unknown>) => unknown }).webSocketClose;
+          if (base) {return base.call(this, ws, code, reason, wasClean);}
           try {
             ws.close(1000, 'closed');
           } catch {}
@@ -231,10 +234,10 @@ type Resolved = {
   schema: Schema;
   functions: Record<string, AnyFn>;
   jobs: Record<string, JobFn<any>>;
-  onCommit?: (topics: string[], env: any) => void | Promise<void>;
+  onCommit?: (topics: Array<string>, env: any) => void | Promise<void>;
   onChanges?: (batch: ChangeBatch, env: any) => void | Promise<void>;
   syncAccess?: (ctx: QueryCtx<any>, actor: string, group: string) => boolean;
-  syncRecheck?: (topics: string[]) => boolean;
+  syncRecheck?: (topics: Array<string>) => boolean;
   syncTopics?: (ctx: QueryCtx<any>, actor: string, topic: string) => boolean;
   syncQuery?: (actor: string, name: string, input: unknown) => SyncQueryPlan | null | Promise<SyncQueryPlan | null>;
   maxJobAttempts?: number;
@@ -249,12 +252,12 @@ export class Engine {
     private readonly def: Resolved,
   ) {}
 
-  private readonly listeners: ((batch: ChangeBatch) => void)[] = [];
-  private readonly rechecks: (() => void)[] = [];
-  private readonly topicListeners: ((topics: string[]) => void)[] = [];
+  private readonly listeners: Array<(batch: ChangeBatch) => void> = [];
+  private readonly rechecks: Array<() => void> = [];
+  private readonly topicListeners: Array<(topics: string[]) => void> = [];
 
   /** @internal Called after each commit with the topics it touched. */
-  onTopics(fn: (topics: string[]) => void): void {
+  onTopics(fn: (topics: Array<string>) => void): void {
     this.topicListeners.push(fn);
   }
 
@@ -264,9 +267,9 @@ export class Engine {
   }
 
   /** The topics out of `topics` that `actor` may hear, by `syncTopics`. None without it. */
-  topicAccess(actor: string, topics: string[]): string[] {
+  topicAccess(actor: string, topics: Array<string>): Array<string> {
     const check = this.def.syncTopics;
-    if (!check) return [];
+    if (!check) {return [];}
     const ctx = this.reader();
     return topics.filter((t) => {
       try {
@@ -286,14 +289,14 @@ export class Engine {
       return null;
     }
     const fn = plan && Object.hasOwn(this.def.functions, plan.fn) ? this.def.functions[plan.fn] : undefined;
-    if (!plan || fn?.kind !== 'query') return null;
+    if (!plan || fn?.kind !== 'query') {return null;}
     try {
       const value = await this.run('query', plan.fn, plan.args);
-      if (!plan.output) return { value };
+      if (!plan.output) {return { value };}
       const checked = (await plan.output['~standard'].validate(value)) as Validated;
       return checked.issues ? { error: 'invalid output' } : { value: checked.value };
-    } catch (e) {
-      return { error: e instanceof Error ? e.message : String(e) };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 
@@ -312,10 +315,10 @@ export class Engine {
   }
 
   /** The changes as `actor` sees them, through each table's `sync.view`. A view that returns null leaves the change out. */
-  view(actor: string, changes: Change[]): Change[] {
-    if (!changes.some((c) => c.doc && this.def.schema[c.table]?.sync?.view)) return changes;
+  view(actor: string, changes: Array<Change>): Array<Change> {
+    if (!changes.some((c) => c.doc && this.def.schema[c.table]?.sync?.view)) {return changes;}
     const ctx = { ...this.reader(), actor };
-    const out: Change[] = [];
+    const out: Array<Change> = [];
     for (const c of changes) {
       const view = this.def.schema[c.table]?.sync?.view;
       if (!c.doc || !view) {
@@ -323,16 +326,16 @@ export class Engine {
         continue;
       }
       const doc = ctx.db.get(c.table as never, c.id) as Record<string, unknown> | null;
-      const seen = doc ? view(doc as never, ctx) : null;
-      if (seen !== null && seen !== undefined) out.push({ ...c, doc: seen as Record<string, unknown> });
+      const seen = doc ? view(doc, ctx) : null;
+      if (seen !== null && seen !== undefined) {out.push({ ...c, doc: seen as Record<string, unknown> });}
     }
     return out;
   }
 
   /** The groups out of `groups` that `actor` may read, by `syncAccess`. None without it. */
-  access(actor: string, groups: string[]): string[] {
+  access(actor: string, groups: Array<string>): Array<string> {
     const check = this.def.syncAccess;
-    if (!check) return [];
+    if (!check) {return [];}
     const ctx = this.reader();
     return groups.filter((g) => {
       try {
@@ -350,7 +353,7 @@ export class Engine {
   }
 
   /** What changed in these sync groups after position `after`. */
-  pull(groups: readonly string[], after: number, limit?: number): PullResult {
+  pull(groups: ReadonlyArray<string>, after: number, limit?: number): PullResult {
     return pull(this.storage, this.def.schema, groups, after, limit);
   }
 
@@ -360,8 +363,8 @@ export class Engine {
 
   async run(kind: 'query' | 'mutation', name: string, args: unknown): Promise<unknown> {
     const fn = Object.hasOwn(this.def.functions, name) ? this.def.functions[name] : undefined;
-    if (!fn || fn.kind !== kind) throw new Error(`no ${kind} function "${name}"`);
-    if (fn.kind === 'query') return fn.run({ db: new DbReader(this.storage, this.def.schema), env: this.env, now: Date.now() }, args);
+    if (!fn || fn.kind !== kind) {throw new Error(`no ${kind} function "${name}"`);}
+    if (fn.kind === 'query') {return fn.run({ db: new DbReader(this.storage, this.def.schema), env: this.env, now: Date.now() }, args);}
 
     const db = new Db(this.storage, this.def.schema);
     const scheduler = this.scheduler();
@@ -385,32 +388,32 @@ export class Engine {
     const scheduler = this.scheduler();
     const max = this.def.maxJobAttempts ?? 5;
     const running = new Set<string>();
-    const active: Promise<void>[] = [];
+    const active: Array<Promise<void>> = [];
     // Decision: a job that hangs gives up the one-at-a-time lane after `laneMs`, so it can't hold up the rest.
     let laneOwner: string | null = null;
     const laneMs = this.def.laneMs ?? 120_000;
     for (;;) {
       for (const job of scheduler.due(Date.now(), 50)) {
-        if (running.has(job.id)) continue;
+        if (running.has(job.id)) {continue;}
         const concurrent = !!(this.def.jobs[job.name] as { concurrent?: boolean } | undefined)?.concurrent;
-        if (!concurrent && laneOwner !== null) continue;
+        if (!concurrent && laneOwner !== null) {continue;}
         let release: ReturnType<typeof setTimeout> | undefined;
         if (!concurrent) {
           laneOwner = job.id;
           release = setTimeout(() => {
-            if (laneOwner === job.id) laneOwner = null;
+            if (laneOwner === job.id) {laneOwner = null;}
           }, laneMs);
         }
         running.add(job.id);
         const done = this.runJob(scheduler, job, max).finally(() => {
           running.delete(job.id);
           clearTimeout(release);
-          if (laneOwner === job.id) laneOwner = null;
+          if (laneOwner === job.id) {laneOwner = null;}
           active.splice(active.indexOf(done), 1);
         });
         active.push(done);
       }
-      if (!active.length) break;
+      if (!active.length) {break;}
       await Promise.race([...active, new Promise((r) => setTimeout(r, 1000))]);
     }
     await this.arm(scheduler);
@@ -419,12 +422,12 @@ export class Engine {
   private async runJob(scheduler: Scheduler, job: ScheduledJob, max: number): Promise<void> {
     const handler = this.def.jobs[job.name];
     try {
-      if (!handler) throw new Error(`no job named "${job.name}"`);
+      if (!handler) {throw new Error(`no job named "${job.name}"`);}
       await handler({ env: this.env, id: job.id, attempt: job.attempts + 1, data: this.dataClient() }, job.args);
       scheduler.done(job);
-    } catch (e) {
-      console.error(`job ${job.name} (${job.id}) failed`, e);
-      scheduler.fail(job, e instanceof Error ? e.message : String(e), max, Date.now());
+    } catch (error) {
+      console.error(`job ${job.name} (${job.id}) failed`, error);
+      scheduler.fail(job, error instanceof Error ? error.message : String(error), max, Date.now());
     }
   }
 
@@ -439,47 +442,47 @@ export class Engine {
   }
 
   private async afterCommit(touched: Set<string>, queueChanged: boolean, batch: ChangeBatch | null = null): Promise<void> {
-    if (queueChanged) await this.arm(this.scheduler());
-    if (batch) for (const fn of this.listeners) {
+    if (queueChanged) {await this.arm(this.scheduler());}
+    if (batch) {for (const fn of this.listeners) {
       try {
         fn(batch);
       } catch (e) {
         console.error('change listener failed', e);
       }
-    }
-    if (touched.size) for (const fn of this.topicListeners) {
+    }}
+    if (touched.size) {for (const fn of this.topicListeners) {
       try {
         fn([...touched]);
       } catch (e) {
         console.error('topic listener failed', e);
       }
-    }
-    if (touched.size && this.rechecks.length && this.def.syncRecheck?.([...touched])) for (const fn of this.rechecks) {
+    }}
+    if (touched.size && this.rechecks.length && this.def.syncRecheck?.([...touched])) {for (const fn of this.rechecks) {
       try {
         fn();
       } catch (e) {
         console.error('sync recheck failed', e);
       }
-    }
+    }}
     if (batch && this.def.onChanges) {
       const onChanges = this.def.onChanges;
       const changes = batch;
       void Promise.resolve()
         .then(() => onChanges(changes, this.env))
-        .catch((e) => console.error('onChanges failed', e));
+        .catch((error) => console.error('onChanges failed', error));
     }
     if (touched.size && this.def.onCommit) {
       const onCommit = this.def.onCommit;
       // Decision: started, not awaited. See `onCommit` in DataDefinition for why.
       void Promise.resolve()
         .then(() => onCommit([...touched], this.env))
-        .catch((e) => console.error('onCommit failed', e));
+        .catch((error) => console.error('onCommit failed', error));
     }
   }
 
   private async arm(scheduler: Scheduler): Promise<void> {
     const next = scheduler.nextAt();
-    if (next === null) await this.storage.deleteAlarm();
-    else await this.storage.setAlarm(next);
+    if (next === null) {await this.storage.deleteAlarm();}
+    else {await this.storage.setAlarm(next);}
   }
 }
