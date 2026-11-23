@@ -338,16 +338,16 @@ export class Engine {
         out.push(c);
         continue;
       }
-      // Decision: a view that throws for one document leaves that change out for this reader, as if it returned null. Failing
-      // the whole page would stop the reader at that document on each pull.
-      let seen: unknown = null;
+      // Decision: a view that throws for one document tells this reader to drop it. Failing the whole page would stop the
+      // reader at that document on each pull, and leaving the change out would let the reader keep a copy it may not see now.
       try {
         const doc = ctx.db.get(c.table as never, c.id) as Record<string, unknown> | null;
-        seen = doc ? view(doc as never, ctx) : null;
+        const seen: unknown = doc ? view(doc as never, ctx) : null;
+        if (seen !== null && seen !== undefined) out.push({ ...c, doc: seen as Record<string, unknown> });
       } catch (e) {
         console.error(`sync view of ${c.table} ${c.id} failed`, e);
+        out.push({ ...c, doc: null });
       }
-      if (seen !== null && seen !== undefined) out.push({ ...c, doc: seen as Record<string, unknown> });
     }
     return out;
   }
@@ -391,13 +391,22 @@ export class Engine {
     const scheduler = this.scheduler();
     // Decision: one SQLite transaction, so a throw rolls back each write and each scheduled job.
     let batch: ChangeBatch | null = null;
-    const result = this.storage.transactionSync(() => {
-      const out = fn.run({ db, scheduler, env: this.env, now: Date.now() }, args);
-      // Decision: a mutation that returns a promise would write after the transaction ended, with no rollback and no word to devices.
-      if (out && typeof (out as { then?: unknown }).then === 'function') throw new Error(`mutation "${name}" returned a promise: mutations are synchronous, so do async work in a job`);
-      batch = db.changes.flush(this.storage);
-      return out;
-    });
+    let result: unknown;
+    try {
+      result = this.storage.transactionSync(() => {
+        const out = fn.run({ db, scheduler, env: this.env, now: Date.now() }, args);
+        // Decision: a mutation that returns a promise would write after the transaction ended, with no rollback and no word to
+        // devices. It is refused, and the rest of it finds the database closed to writes.
+        if (out && typeof (out as { then?: unknown }).then === 'function') {
+          void Promise.resolve(out).catch(() => {});
+          throw new Error(`mutation "${name}" returned a promise: mutations are synchronous, so do async work in a job`);
+        }
+        batch = db.changes.flush(this.storage);
+        return out;
+      });
+    } finally {
+      db.end();
+    }
     await this.afterCommit(db.touched, scheduler.changed, batch);
     return result;
   }

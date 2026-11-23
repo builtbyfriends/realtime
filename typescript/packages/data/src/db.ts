@@ -104,12 +104,24 @@ export class Db<S extends Schema> extends DbReader<S> {
     this.changes = new ChangeRecorder(schema);
   }
 
+  private ended = false;
+
+  /** @internal Called when the mutation's transaction is over. A write after that would land outside it, so it throws. */
+  end(): void {
+    this.ended = true;
+  }
+
+  private open(): void {
+    if (this.ended) throw new Error('this mutation has ended: a write after an await would land outside its transaction');
+  }
+
   /** Adds an extra live topic for this call, on top of the table topics. */
   touch(topic: string): void {
     this.touched.add(topic);
   }
 
   insert<T extends keyof S & string>(table: T, value: NewDoc<S[T]>): string {
+    this.open();
     const def = this.def(table);
     const doc = checked(def, value);
     const id = crypto.randomUUID();
@@ -140,6 +152,7 @@ export class Db<S extends Schema> extends DbReader<S> {
   }
 
   delete<T extends keyof S & string>(table: T, id: string): void {
+    this.open();
     const { def, row, old } = this.load(table, id);
     run(this.storage, `DELETE FROM t_${table} WHERE _rowid=?`, row._rowid);
     this.unindex(table, def, row._rowid);
@@ -155,6 +168,7 @@ export class Db<S extends Schema> extends DbReader<S> {
   }
 
   private write(table: string, def: TableDef, row: Row, old: Record<string, unknown>, next: Record<string, unknown>) {
+    this.open();
     run(this.storage, `UPDATE t_${table} SET doc=? WHERE _rowid=?`, JSON.stringify(next), row._rowid);
     this.unindex(table, def, row._rowid);
     this.reindex(table, def, row._rowid, next);

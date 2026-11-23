@@ -362,7 +362,7 @@ describe('sockets that go wrong', () => {
     expect(bad.closed).toEqual([1011]);
   });
 
-  it('leaves out the one document whose view throws, and sends the rest of the page', async () => {
+  it('sends a removal for the one document whose view throws, and the rest of the page', async () => {
     const { sockets, add } = setup();
     await add('x', 'boom');
     await add('x', 'fine');
@@ -372,8 +372,18 @@ describe('sockets that go wrong', () => {
     sockets.message(a, JSON.stringify({ type: 'pull', after: 0, id: 1 }));
     logged.mockRestore();
     expect(a.closed).toEqual([]);
-    expect(a.sent[0]).toMatchObject({ type: 'pull', seq: 2, changes: [{ doc: { text: 'fine' } }] });
-    expect(a.sent[0].changes).toHaveLength(1);
+    expect(a.sent[0]).toMatchObject({ type: 'pull', seq: 2, changes: [{ doc: null }, { doc: { text: 'fine' } }] });
+    expect(a.sent[0].changes).toHaveLength(2);
+  });
+
+  it('refuses a query that names more topics than one message may check', async () => {
+    const { sockets } = setup();
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: [] });
+    const topics = Array.from({ length: 1001 }, (_, i) => `t:${i}`);
+    sockets.message(a, JSON.stringify({ type: 'query', id: 'q', name: 'pins.list', input: null, topics }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(a.sent).toEqual([{ type: 'result', id: 'q', denied: true }]);
   });
 
   it('refuses a header that does not name an actor and its groups', async () => {

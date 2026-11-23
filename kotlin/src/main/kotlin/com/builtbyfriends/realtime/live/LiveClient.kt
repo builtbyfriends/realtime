@@ -3,9 +3,12 @@ package com.builtbyfriends.realtime.live
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -42,7 +45,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
  *
  * @param url The route that exports `live.connect` and `live.control`, for example `https://app.example.com/live`.
  * @param headers Called for every request, so it can return a fresh token each time.
- * @param onUnauthorized Called when the server answers 401, before the client tries again. Refresh the token here.
+ * @param onUnauthorized Called when the stream answers 401 or 403 (an expired or missing token), before the client tries again. Refresh the token here.
  * @param retryMillis How long to wait before reconnect attempt `n`, counting from 0.
  */
 class LiveClient(
@@ -64,6 +67,10 @@ class LiveClient(
     /** True while the stream is open and its subscriptions are in place. */
     val connected: StateFlow<Boolean> get() = connectedState
     private val connectedState = MutableStateFlow(false)
+
+    /** The failure that ended the last attempt to keep the stream open, or null. Cleared when the stream opens. */
+    val lastError: StateFlow<Throwable?> get() = lastErrorState
+    private val lastErrorState = MutableStateFlow<Throwable?>(null)
 
     /** Events for the topics you subscribed to. */
     val events: SharedFlow<LiveEvent> = MutableSharedFlow(extraBufferCapacity = 256, onBufferOverflow = BufferOverflow.SUSPEND)
@@ -123,14 +130,34 @@ class LiveClient(
         connectedState.value = false
     }
 
+    @Synchronized
+    private fun markOpen() {
+        if (closed) throw CancellationException("live: client is closed")
+        open = true
+    }
+
+    @Synchronized
+    private fun markConnected(reconnect: Boolean) {
+        if (closed) throw CancellationException("live: client is closed")
+        connectedState.value = true
+        lastErrorState.value = null
+        if (reconnect) reconnectsOut.tryEmit(Unit)
+    }
+
+    @Synchronized
+    private fun recordFailure(e: Exception) {
+        if (!closed) lastErrorState.value = e
+    }
+
     private suspend fun run() {
         var attempt = 0
         while (scope.isActive && !closed) {
             try {
                 listen { attempt = 0 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
+            } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                recordFailure(e)
             }
             open = false
             connectedState.value = false
@@ -140,7 +167,7 @@ class LiveClient(
         }
     }
 
-    private suspend fun listen(onOpen: () -> Unit) = withContext(Dispatchers.IO) {
+    private suspend fun listen(onAlive: () -> Unit) = withContext(Dispatchers.IO) {
         val call = http.newCall(
             Request.Builder()
                 .url(url.newBuilder().addQueryParameter("connectionId", connectionId).build())
@@ -148,33 +175,36 @@ class LiveClient(
                 .apply { headers().forEach { (name, value) -> header(name, value) } }
                 .get().build(),
         )
-        val cancel = currentCoroutineContext()[Job]?.invokeOnCompletion { call.cancel() }
-        try {
+        coroutineScope {
+            // Decision: a child that waits for cancellation, because Job.invokeOnCompletion only fires once the job has finished, which a blocked execute() prevents.
+            val watcher = launch { try { awaitCancellation() } finally { call.cancel() } }
+            try {
             call.execute().use { response ->
-                if (response.code == 401) { onUnauthorized(); throw LiveException.Unauthorized() }
+                if (response.code == 401 || response.code == 403) { onUnauthorized(); throw LiveException.Unauthorized(response.code) }
                 if (response.code != 200) throw LiveException.Status(response.code)
                 val source = response.body!!.source()
 
                 val reconnect = hasOpened
                 hasOpened = true
-                open = true
+                markOpen()
                 restoreSubscriptions()
-                onOpen()
-                connectedState.value = true
-                if (reconnect) reconnectsOut.tryEmit(Unit)
+                markConnected(reconnect)
 
                 val parser = SseParser()
+                var alive = false
                 while (true) {
                     ensureActive()
                     val line = source.readUtf8Line() ?: break
+                    if (!alive) { alive = true; onAlive() }
                     val event = parser.feed(line)?.let(SseParser::liveEvent) ?: continue
                     val held = subscriptions[event.subscriptionId]?.takeIf { it.topic == event.topic } ?: continue
                     event.eventId?.let { held.lastEventId = it }
                     eventsOut.emit(event)
                 }
             }
-        } finally {
-            cancel?.dispose()
+            } finally {
+                watcher.cancel()
+            }
         }
     }
 
