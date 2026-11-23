@@ -1,4 +1,4 @@
-import type { InputOf, OutputOf, Registry } from '@builtbyfriends/realtime';
+import type { ErrorsOf, InputOf, OutputOf, Registry } from '@builtbyfriends/realtime';
 
 type Procs<R> = R extends Registry ? NonNullable<R['~procedures']> : never;
 
@@ -55,13 +55,16 @@ export function createClient<R extends Registry>(
         headers: { 'content-type': 'application/json', ...authorization, ...options.headers },
         body: input === undefined ? '' : JSON.stringify(input),
       });
-      const body: unknown = await res.json().catch(() => ({}));
+      const body: unknown = await res.json().catch(() => undefined);
+      if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+        throw new RpcError<ErrorsOf<Procs<R>[N]>>('INTERNAL', `HTTP ${res.status}: the answer wasn't the expected JSON`, res.status);
+      }
       const error = readError(body);
-      if (!res.ok || error) {
+      if (!res.ok || ('error' in body && body.error)) {
         const e = error ?? { code: 'INTERNAL', message: `HTTP ${res.status}` };
         throw new RpcError(e.code, e.message, res.status, e.issues);
       }
-      const data = typeof body === 'object' && body !== null && 'data' in body ? body.data : undefined;
+      const data = 'data' in body ? body.data : undefined;
       // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- types-only client: the registry type is the contract for the wire data
       return data as OutputOf<Procs<R>[N]>;
     },

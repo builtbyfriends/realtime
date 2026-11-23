@@ -36,8 +36,10 @@ appScope.launch { live.events.collect { event -> println("${event.topic} ${event
 appScope.launch { live.reconnects.collect { reload() } }
 ```
 
-- The `headers` function runs for every request, so it can hand out a fresh token. When the server answers 401, `onUnauthorized` runs and the client tries again after a short wait.
+- The `headers` function runs for every request, so it can hand out a fresh token. When the stream answers 401 or 403, `onUnauthorized` runs and the client tries again after a short wait.
 - `subscribe` before `start()` is fine. The client holds the subscriptions and sends them when the stream opens, and again after every reconnect. Once the stream is open, `subscribe` throws `LiveException.Rejected` if the server refuses the topic.
 - bwf replays nothing. When `reconnects` emits, fetch again whatever the screen shows.
 - `connected` is a `StateFlow<Boolean>`, handy for a slow fallback poll while the stream is down.
+- `lastError` is a `StateFlow<Throwable?>` with the failure that ended the last attempt (a status error, a dropped connection), and goes back to null when the stream opens. Use it to log or show why the stream is down.
+- The retry wait starts over only after the stream has sent a first line, so a server that accepts and then drops is retried with a growing wait.
 - `close()` ends the stream for good.

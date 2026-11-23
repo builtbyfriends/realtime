@@ -13,7 +13,10 @@ const Tokens = z.record(z.string(), z.object({ id: z.string(), orgId: z.string()
 
 const apiToken = bearerAuth<User, Env>({
   name: 'api-token',
-  verify: (token, env) => Tokens.parse(JSON.parse(env.API_TOKENS))[token] ?? null,
+  verify: (token, env) => {
+    const users = Tokens.parse(JSON.parse(env.API_TOKENS));
+    return Object.hasOwn(users, token) ? (users[token] ?? null) : null;
+  },
   actorId: (u) => u.id,
 });
 const session = anyOf('session-or-token', apiToken);

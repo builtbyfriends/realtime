@@ -30,17 +30,28 @@ const SECRET_HEADERS = /^(authorization|x-api-key|cookie|set-cookie|proxy-author
 // Decision: the dev server or the HTTP client adds these to each request, so they only add noise.
 const NOISE_HEADERS = /^(cf-|x-forwarded-|sec-|accept-encoding$|accept-language$|connection$|host$|content-length$)/i;
 
-const mask = (value: string) => {
+const show = (t: string) => (t.length > 6 ? `${t.slice(0, 6)}…` : t);
+
+const maskCookie = (pair: string) => {
+  const eq = pair.indexOf('=');
+  return eq < 0 ? show(pair.trim()) : `${pair.slice(0, eq + 1)}${show(pair.slice(eq + 1).trim())}`;
+};
+
+const mask = (value: string, name = 'authorization') => {
+  if (/^cookie$/i.test(name)) {return value.split(';').map((pair) => maskCookie(pair.trim())).join('; ');}
+  if (/^set-cookie$/i.test(name)) {
+    const [first = '', ...attributes] = value.split(';');
+    return [maskCookie(first.trim()), ...attributes.map((a) => a.trim())].join('; ');
+  }
   const [scheme, token] = value.includes(' ') ? value.split(/ (.*)/s) : ['', value];
-  const t = token ?? '';
-  const shown = t.length > 6 ? `${t.slice(0, 6)}…` : t;
+  const shown = show(token ?? '');
   return scheme ? `${scheme} ${shown}` : shown;
 };
 
 const headers = (h: Headers) => {
   const out: Record<string, string> = {};
   h.forEach((v, k) => {
-    if (!NOISE_HEADERS.test(k)) {out[k] = SECRET_HEADERS.test(k) ? mask(v) : v;}
+    if (!NOISE_HEADERS.test(k)) {out[k] = SECRET_HEADERS.test(k) ? mask(v, k) : v;}
   });
   return out;
 };

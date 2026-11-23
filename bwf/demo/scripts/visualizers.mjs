@@ -68,11 +68,10 @@ try {
   await client.callTool({ name: 'contacts_delete', arguments: { id: 'c1' } });
   await client.close();
 
-  step('AI tools over HTTP: an outside agent, one approval, one FORBIDDEN');
+  step('AI tools over HTTP: an outside agent, one held call, one FORBIDDEN');
   const create = { tool: 'contacts_create', input: { orgId: 'o1', name: 'Hedy Lamarr', email: 'hedy@example.com' } };
   await post('/rpc/ai/run', { tool: 'contacts_search', input: { orgId: 'o1', query: 'hedy' } }, 'demo-bob');
   await post('/rpc/ai/run', create, 'demo-bob');
-  await post('/rpc/ai/run', { ...create, approved: true }, 'demo-bob');
   await post('/rpc/ai/run', { tool: 'contacts_search', input: { orgId: 'o1', query: 'a' } }, 'demo-grace');
 
   step('AI chat: the in-app assistant, paused for approval, then approved');

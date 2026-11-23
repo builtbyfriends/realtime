@@ -81,6 +81,7 @@ type Entry = {
   listeners: Set<() => void>;
   stops: Array<() => void>;
   inFlight: boolean;
+  running: Promise<void> | undefined;
   dirty: boolean;
   timer: ReturnType<typeof setTimeout> | undefined;
   gc: ReturnType<typeof setTimeout> | undefined;
@@ -106,23 +107,31 @@ export function createLive<R extends Typed = Registry>(options: LiveOptions<R>) 
   async function fetchNow(e: Entry): Promise<void> {
     if (e.inFlight) {
       e.dirty = true;
-      return;
+      return e.running;
     }
     e.inFlight = true;
+    const finishers: Array<() => void> = [];
+    e.running = new Promise<void>((resolve) => {
+      finishers.push(resolve);
+    });
     const generation = e.generation;
-    do {
-      e.dirty = false;
-      if (e.state.status !== 'loading') {set(e, { ...e.state, fetching: true });}
-      try {
-        const { data } = await e.load();
-        if (generation !== e.generation) {break;}
-        set(e, { status: 'ready', data, error: undefined, fetching: e.dirty });
-      } catch (error) {
-        if (generation !== e.generation) {break;}
-        set(e, { status: 'error', data: e.state.data, error: error instanceof Error ? error : new Error(String(error)), fetching: e.dirty });
-      }
-    } while (e.dirty && generation === e.generation);
-    e.inFlight = false;
+    try {
+      do {
+        e.dirty = false;
+        if (e.state.status !== 'loading') {set(e, { ...e.state, fetching: true });}
+        try {
+          const { data } = await e.load();
+          if (generation !== e.generation) {break;}
+          set(e, { status: 'ready', data, error: undefined, fetching: e.dirty });
+        } catch (error) {
+          if (generation !== e.generation) {break;}
+          set(e, { status: 'error', data: e.state.data, error: error instanceof Error ? error : new Error(String(error)), fetching: e.dirty });
+        }
+      } while (e.dirty && generation === e.generation);
+    } finally {
+      if (generation === e.generation) {e.inFlight = false;}
+      for (const finish of finishers) {finish();}
+    }
   }
 
   function set(e: Entry, state: QueryState<unknown>) {
@@ -132,6 +141,7 @@ export function createLive<R extends Typed = Registry>(options: LiveOptions<R>) 
   }
 
   function schedule(e: Entry) {
+    if (!e.listeners.size) {return;}
     clearTimeout(e.timer);
     e.timer = setTimeout(() => void fetchNow(e), debounceMs);
   }
@@ -169,8 +179,9 @@ export function createLive<R extends Typed = Registry>(options: LiveOptions<R>) 
     for (const s of e.stops.splice(0)) {s();}
     e.generation++;
     e.inFlight = false;
+    clearTimeout(e.gc);
     e.gc = setTimeout(() => {
-      if (!e.listeners.size) {entries.delete(e.key);}
+      if (!e.listeners.size && entries.get(e.key) === e) {entries.delete(e.key);}
     }, cacheMs);
   }
 
@@ -185,7 +196,7 @@ export function createLive<R extends Typed = Registry>(options: LiveOptions<R>) 
     const key = `${name}:${stableKey(input)}:${stableKey(topics)}`;
     let e = entries.get(key);
     if (!e) {
-      e = { key, name, input, load: async () => ({ data: await options.client.call(name, input) }), topics, state: { status: 'loading', data: undefined, error: undefined, fetching: true }, listeners: new Set(), stops: [], inFlight: false, dirty: false, timer: undefined, gc: undefined, generation: 0 };
+      e = { key, name, input, load: async () => ({ data: await options.client.call(name, input) }), topics, state: { status: 'loading', data: undefined, error: undefined, fetching: true }, listeners: new Set(), stops: [], inFlight: false, running: undefined, dirty: false, timer: undefined, gc: undefined, generation: 0 };
       entries.set(key, e);
     }
     const entry = e;
@@ -194,7 +205,7 @@ export function createLive<R extends Typed = Registry>(options: LiveOptions<R>) 
       getSnapshot: () => entry.state as QueryState<OutputOf<Procs<R>[N]>>,
       subscribe(listener) {
         entry.listeners.add(listener);
-        if (enabled && entry.listeners.size === 1) {start(entry);}
+        if (enabled) {start(entry);}
         return () => {
           entry.listeners.delete(listener);
           if (!entry.listeners.size) {stop(entry);}
@@ -218,20 +229,20 @@ export function createLive<R extends Typed = Registry>(options: LiveOptions<R>) 
     mutateOptions: MutateOptions<R> = {},
   ): Promise<OutputOf<Procs<R>[N]>> {
     const changed: Array<{ e: Entry; before: QueryState<unknown>; guess: QueryState<unknown> }> = [];
-    mutateOptions.optimistic?.({
-      update(queryName, queryInput, fn) {
-        const prefix = `${queryName}:${stableKey(queryInput)}:`;
-        for (const e of entries.values()) {
-          const before = e.state;
-          if (!e.key.startsWith(prefix) || before.status === 'loading' || before.data === undefined) {continue;}
-          // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the key matched this procedure and input, so the cached data has the type the store gives `fn`
-          const guess = { ...before, data: fn(before.data as OutputOf<Procs<R>[typeof queryName]>) };
-          set(e, guess);
-          changed.push({ e, before, guess });
-        }
-      },
-    });
     try {
+      mutateOptions.optimistic?.({
+        update(queryName, queryInput, fn) {
+          const prefix = `${queryName}:${stableKey(queryInput)}:`;
+          for (const e of entries.values()) {
+            const before = e.state;
+            if (!e.key.startsWith(prefix) || before.status === 'loading' || before.data === undefined) {continue;}
+            // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the key matched this procedure and input, so the cached data has the type the store gives `fn`
+            const guess = { ...before, data: fn(before.data as OutputOf<Procs<R>[typeof queryName]>) };
+            set(e, guess);
+            changed.push({ e, before, guess });
+          }
+        },
+      });
       return await options.client.call(name, input);
     } catch (error) {
       for (const { e, before, guess } of changed.reverse()) {

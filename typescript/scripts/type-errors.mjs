@@ -18,7 +18,7 @@ if (process.argv.includes('--update') || !existsSync(expectedPath)) {
 } else if (readFileSync(expectedPath, 'utf8') !== actual) {
   console.error('Compiler messages changed. Diff against messages.expected.txt:\n');
   console.error(actual);
-  console.error('Run `npm run test:types -- --update` if the change is intended.');
+  console.error('Run `bun run test:types --update` if the change is intended.');
   process.exit(1);
 } else {
   console.log(`compiler messages match (${actual.split('\n').filter((l) => l.includes('error TS')).length} errors)`);

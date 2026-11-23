@@ -30,6 +30,14 @@ describe('pipeline', () => {
     expect(await call('contacts.get', { orgId: 'o1', id: 'c1' }, 'bob')).toEqual({ ok: true, status: 200, value: { id: 'c1', owner: 'u-bob' } });
   });
 
+  it('does not read inherited object properties as tokens or error codes', async () => {
+    const { call } = setup();
+    for (const t of ['constructor', '__proto__', 'toString']) {
+      expect(await call('contacts.get', { orgId: 'o1', id: 'c1' }, t)).toMatchObject({ status: 401 });
+    }
+    expect(await call('contacts.get', { orgId: 'o1', id: 'inherited' }, 'bob')).toEqual({ ok: false, status: 500, code: 'INTERNAL', message: 'Internal error' });
+  });
+
   it('checks auth before input, so anonymous callers learn nothing about the schema', async () => {
     const { call } = setup();
     expect(await call('contacts.get', 'garbage')).toMatchObject({ status: 401 });

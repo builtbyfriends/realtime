@@ -66,6 +66,6 @@
     "access": "public"
   },
   "scripts": {
-    "prepack": "cp ../../../LICENSE LICENSE"
+    "prepack": "cp ../../../LICENSE LICENSE && mkdir -p dist && cp src/devtools.html dist/devtools.html"
   }
 }

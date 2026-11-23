@@ -119,4 +119,63 @@ class LiveClientTest {
         assertEquals("FORBIDDEN", error.code)
         live.close()
     }
+
+    @Test fun aForbiddenStreamCallsOnUnauthorizedAndTriesAgain() = runBlocking {
+        var served = 0
+        route({ if (served++ == 0) MockResponse().setResponseCode(403) else sse(": connected", EVENT) })
+        var refreshed = 0
+        val live = client(onUnauthorized = { refreshed++ })
+        live.subscribe("wall", "wall:1")
+        live.start()
+        withTimeout(5_000) { live.events.first() }
+        live.close()
+        assertEquals(1, refreshed)
+    }
+
+    @Test fun lastErrorShowsWhyTheStreamFailedAndClearsOnOpen() = runBlocking {
+        var served = 0
+        route({ if (served++ == 0) MockResponse().setResponseCode(500) else sse(": connected") })
+        val live = client()
+        live.start()
+        val error = withTimeout(5_000) { live.lastError.first { it != null } }
+        assertEquals(500, (error as LiveException.Status).status)
+        withTimeout(5_000) { live.connected.first { it } }
+        assertEquals(null, live.lastError.value)
+        live.close()
+    }
+
+    @Test fun backoffStartsOverOnlyAfterTheStreamSendsALine() = runBlocking {
+        val attempts = CopyOnWriteArrayList<Int>()
+        var served = 0
+        route({
+            when (served++) {
+                0 -> MockResponse().setResponseCode(200).setHeader("content-type", "text/event-stream")
+                1 -> MockResponse().setResponseCode(200).setHeader("content-type", "text/event-stream")
+                else -> sse(": connected")
+            }
+        })
+        val live = LiveClient(
+            url = server.url("/live").toString(),
+            scope = scope,
+            retryMillis = { attempts += it; 10L },
+        )
+        live.start()
+        withTimeout(5_000) { while (attempts.size < 3) kotlinx.coroutines.delay(10) }
+        live.close()
+        assertEquals(listOf(0, 1, 0), attempts.take(3))
+    }
+
+    @Test fun closeInterruptsAStreamThatIsWaitingForData() = runBlocking {
+        route({ MockResponse().setHeader("content-type", "text/event-stream").setBody(": connected\n\n").setBodyDelay(30, java.util.concurrent.TimeUnit.SECONDS) })
+        val live = client()
+        live.start()
+        withTimeout(5_000) { live.connected.first { it } }
+        val before = System.nanoTime()
+        live.close()
+        assertEquals(false, live.connected.value)
+        kotlinx.coroutines.delay(300)
+        assertTrue((System.nanoTime() - before) / 1_000_000 < 3_000)
+        assertEquals(false, live.connected.value)
+        assertEquals(null, live.lastError.value)
+    }
 }

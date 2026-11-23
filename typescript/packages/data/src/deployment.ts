@@ -118,6 +118,8 @@ export type DataDefinition<S extends Schema, F extends Record<string, AnyFn>, J 
   laneMs?: number;
 };
 
+const MAX_CUT_SHORT = 10;
+
 /** How the object answers one live query over the socket. */
 export type SyncQueryPlan = { fn: string; args: unknown; output?: AnySchema };
 
@@ -180,7 +182,7 @@ function parseIdentity(header: string): SocketIdentity {
 }
 
 function makeClient<F>(call: DataObject['run'], job: (id: string) => Promise<ScheduledJob | null>): DataClient<F> {
-  const group = (kind: 'query' | 'mutation') => new Proxy({}, { get: (_, fn) => (typeof fn === 'string' ? (args?: unknown) => call(kind, fn, args) : undefined) });
+  const group = (kind: 'query' | 'mutation') => new Proxy({}, { get: (_, fn) => (typeof fn === 'string' && fn !== 'then' ? (args?: unknown) => call(kind, fn, args) : undefined) });
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the proxy answers any function name, and DataClient<F> says which exist
   return { query: group('query'), mutate: group('mutation'), job } as DataClient<F>;
 }
@@ -243,12 +245,18 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
             return super.fetch?.(request) ?? new Response('not found', { status: 404 });
           }
           if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {return new Response('expected a WebSocket', { status: 426 });}
+          let who: SocketIdentity;
+          try {
+            who = parseIdentity(header);
+          } catch {
+            return new Response('bad sync header', { status: 400 });
+          }
           // Decision: read WebSocketPair from globalThis, because this package doesn't load the Workers types.
           const scope: typeof globalThis & { WebSocketPair?: unknown } = globalThis;
           const Pair = scope.WebSocketPair;
           if (!isSocketPair(Pair)) {return new Response('WebSockets are not available here', { status: 501 });}
           const [device, object] = new Pair();
-          this.#sockets.accept(object, parseIdentity(header));
+          this.#sockets.accept(object, who);
           return new Response(null, { status: 101, webSocket: device } as ResponseInit);
         }
         webSocketMessage(ws: Ws, message: string | ArrayBuffer) {
@@ -321,7 +329,8 @@ export class Engine {
     return topics.filter((t) => {
       try {
         return check(ctx, actor, t);
-      } catch {
+      } catch (error) {
+        console.error(`syncTopics for "${t}" failed`, error);
         return false;
       }
     });
@@ -332,7 +341,8 @@ export class Engine {
     let plan: SyncQueryPlan | null | undefined;
     try {
       plan = await this.def.syncQuery?.(actor, name, input);
-    } catch {
+    } catch (error) {
+      console.error(`syncQuery for "${name}" failed`, error);
       return null;
     }
     const fn = plan && Object.hasOwn(this.def.functions, plan.fn) ? this.def.functions[plan.fn] : undefined;
@@ -343,7 +353,9 @@ export class Engine {
       const checked = await plan.output['~standard'].validate(value);
       return checked.issues ? { error: 'invalid output' } : { value: checked.value };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
+      // Decision: the device gets a fixed text, as an HTTP caller gets INTERNAL. The error's own text can name tables and fields.
+      console.error(`live query "${name}" failed`, error);
+      return { error: 'query failed' };
     }
   }
 
@@ -372,9 +384,16 @@ export class Engine {
         out.push(c);
         continue;
       }
-      const doc: unknown = ctx.db.get(c.table, c.id);
-      const seen = isJsonObject(doc) ? view(doc, ctx) : null;
-      if (seen) {out.push({ ...c, doc: seen });}
+      // Decision: a view that throws for one document tells this reader to drop it. Failing the whole page would stop the
+      // reader at that document on each pull, and leaving the change out would let the reader keep a copy it may not see now.
+      try {
+        const doc: unknown = ctx.db.get(c.table, c.id);
+        const seen = isJsonObject(doc) ? view(doc, ctx) : null;
+        if (seen) {out.push({ ...c, doc: seen });}
+      } catch (error) {
+        console.error(`sync view of ${c.table} ${c.id} failed`, error);
+        out.push({ ...c, doc: null });
+      }
     }
     return out;
   }
@@ -387,7 +406,8 @@ export class Engine {
     return groups.filter((g) => {
       try {
         return check(ctx, actor, g);
-      } catch {
+      } catch (error) {
+        console.error(`syncAccess for "${g}" failed`, error);
         return false;
       }
     });
@@ -405,7 +425,7 @@ export class Engine {
   }
 
   scheduler(): Scheduler {
-    return new Scheduler(this.storage, (name) => name in this.def.jobs);
+    return new Scheduler(this.storage, (name) => Object.hasOwn(this.def.jobs, name));
   }
 
   // oxlint-disable-next-line quality/no-unknown-returns -- the result is the app's own function's return value
@@ -418,11 +438,22 @@ export class Engine {
     const scheduler = this.scheduler();
     // Decision: one SQLite transaction, so a throw rolls back each write and each scheduled job.
     let batch: ChangeBatch | null = null;
-    const result = this.storage.transactionSync(() => {
-      const out = fn.run({ db, scheduler, env: this.env, now: Date.now() }, args);
-      batch = db.changes.flush(this.storage);
-      return out;
-    });
+    let result: unknown;
+    try {
+      result = this.storage.transactionSync(() => {
+        const out = fn.run({ db, scheduler, env: this.env, now: Date.now() }, args);
+        // Decision: a mutation that returns a promise would write after the transaction ended, with no rollback and no word to
+        // devices. It is refused, and the rest of it finds the database closed to writes.
+        if (out && typeof (out as { then?: unknown }).then === 'function') {
+          void Promise.resolve(out).catch(() => {});
+          throw new Error(`mutation "${name}" returned a promise: mutations are synchronous, so do async work in a job`);
+        }
+        batch = db.changes.flush(this.storage);
+        return out;
+      });
+    } finally {
+      db.end();
+    }
     await this.afterCommit(db.touched, scheduler.changed, batch);
     return result;
   }
@@ -473,14 +504,34 @@ export class Engine {
   }
 
   private async runJob(scheduler: Scheduler, job: ScheduledJob, max: number): Promise<void> {
-    const handler = this.def.jobs[job.name];
+    const handler = Object.hasOwn(this.def.jobs, job.name) ? this.def.jobs[job.name] : undefined;
+    // Decision: what the handler did and writing that down are kept apart, so a job that ran isn't counted as failed
+    // because the note couldn't be written, and a storage error here doesn't end the alarm for the jobs beside it.
+    let failure: { error: unknown } | null = null;
     try {
       if (!handler) {throw new Error(`no job named "${job.name}"`);}
+      // Decision: a run that never ended took the object down, or a deploy cut it short. After ten of those in a row the
+      // job is parked. A throw is an ending, and counts against `maxJobAttempts` as before.
+      const cutShort = scheduler.started(job);
+      if (cutShort === null) {return;}
+      if (cutShort > MAX_CUT_SHORT) {
+        console.error(`job ${job.name} (${job.id}) parked: its runs keep stopping before they finish`);
+        scheduler.park(job, 'stopped before it finished, too many times');
+        return;
+      }
       await handler({ env: this.env, id: job.id, attempt: job.attempts + 1, data: this.dataClient() }, job.args);
-      scheduler.done(job);
     } catch (error) {
-      reportError(`job ${job.name} (${job.id}) failed`, error);
-      scheduler.fail(job, error instanceof Error ? error.message : String(error), max, Date.now());
+      failure = { error };
+    }
+    try {
+      if (!failure) {
+        scheduler.done(job);
+        return;
+      }
+      reportError(`job ${job.name} (${job.id}) failed`, failure.error);
+      scheduler.fail(job, failure.error instanceof Error ? failure.error.message : String(failure.error), max, Date.now());
+    } catch (error) {
+      reportError(`job ${job.name} (${job.id}): its result couldn't be saved`, error);
     }
   }
 
@@ -494,28 +545,43 @@ export class Engine {
   }
 
   private async afterCommit(touched: Set<string>, queueChanged: boolean, batch: ChangeBatch | null = null): Promise<void> {
-    if (queueChanged) {await this.arm(this.scheduler());}
-    if (batch) {for (const fn of this.listeners) {
+    // Decision: the write is committed, so devices hear about it even when the alarm can't be set. The caller still gets the error.
+    try {
+      if (queueChanged) {await this.arm(this.scheduler());}
+    } finally {
+      this.fanOut(touched, batch);
+    }
+  }
+
+  private fanOut(touched: Set<string>, batch: ChangeBatch | null): void {
+    // Decision: access is checked again before the commit goes out, so a reader the commit removed doesn't get what it wrote.
+    if (touched.size && this.rechecks.length) {
       try {
-        fn(batch);
-      } catch (error) {
-        reportError('change listener failed', error);
-      }
-    }}
-    if (touched.size) {for (const fn of this.topicListeners) {
-      try {
-        fn([...touched]);
-      } catch (error) {
-        reportError('topic listener failed', error);
-      }
-    }}
-    if (touched.size && this.rechecks.length && this.def.syncRecheck?.([...touched])) {for (const fn of this.rechecks) {
-      try {
-        fn();
+        if (this.def.syncRecheck?.([...touched])) {
+          for (const fn of this.rechecks) {fn();}
+        }
       } catch (error) {
         reportError('sync recheck failed', error);
       }
-    }}
+    }
+    if (batch) {
+      for (const fn of this.listeners) {
+        try {
+          fn(batch);
+        } catch (error) {
+          reportError('change listener failed', error);
+        }
+      }
+    }
+    if (touched.size) {
+      for (const fn of this.topicListeners) {
+        try {
+          fn([...touched]);
+        } catch (error) {
+          reportError('topic listener failed', error);
+        }
+      }
+    }
     if (batch && this.def.onChanges) {
       const onChanges = this.def.onChanges;
       const changes = batch;

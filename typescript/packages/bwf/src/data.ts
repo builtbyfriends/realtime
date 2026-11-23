@@ -26,8 +26,9 @@ export function publishTopics(live: Publisher, options: { only?: (topic: string)
 }
 
 export type TopicContext = { topic: string; user: unknown; owner: string | null; env: BwfEnv; request: Request };
+// Decision: a fresh copy without g or y, so lastIndex never carries over between calls.
 const matches = (pattern: RegExp, topic: string) => {
-  const m = pattern.exec(topic);
+  const m = new RegExp(pattern.source, pattern.flags.replaceAll(/[gy]/g, '')).exec(topic);
   return m && m[0] === topic ? m : null;
 };
 

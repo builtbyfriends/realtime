@@ -127,6 +127,14 @@ export interface Registry<P extends ReadonlyArray<AnyProcedure> = ReadonlyArray<
 
 type CallerContext = Awaited<ReturnType<AuthProvider['resolve']>>;
 
+const shown = (props: AnalyticsProps): string => {
+  try {
+    return JSON.stringify(props);
+  } catch {
+    return '(props that JSON can\'t show)';
+  }
+};
+
 const NAME_RE = /^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$/;
 const CODE_RE = /^[A-Z][A-Z0-9_]*$/;
 const COMMAND_RE = /^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$/;
@@ -323,6 +331,17 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
     const surfaceConcern = SURFACE_CONCERN[exec.surface];
     if (surfaceConcern) {step(surfaceConcern, 'pass', `called over ${exec.surface}`);}
 
+    // Decision: the actor id is a label for traces and analytics, so a provider whose `actorId` throws doesn't fail the call.
+    const actorOf = (who: unknown): string | undefined => {
+      if (d.authn.kind !== 'auth') {return undefined;}
+      try {
+        return d.authn.provider.actorId?.(who) ?? undefined;
+      } catch (error) {
+        onError(error, info('authn.actorId'));
+        return undefined;
+      }
+    };
+
     let ctx: CallerContext;
     if (d.authn.kind === 'auth') {
       try {
@@ -336,7 +355,7 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
         step('authn', 'fail', 'no caller: 401 UNAUTHENTICATED');
         return builtinFailure('UNAUTHENTICATED');
       }
-      const actor = d.authn.provider.actorId?.(ctx);
+      const actor = actorOf(ctx);
       step('authn', 'pass', actor ? `actor ${actor}` : 'signed in');
     } else {
       ctx = null;
@@ -345,7 +364,14 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
 
     let input: unknown = undefined;
     if (d.input.kind === 'schema') {
-      const r = await validate(d.input.schema, rawInput);
+      let r: Awaited<ReturnType<typeof validate>>;
+      try {
+        r = await validate(d.input.schema, rawInput);
+      } catch (error) {
+        onError(error, info('input'));
+        step('input', 'fail', 'schema threw: 500 INTERNAL');
+        return builtinFailure('INTERNAL');
+      }
       if (!r.ok) {
         step('input', 'fail', `400 INVALID_INPUT: ${r.issues.map((i) => i.message).join('; ')}`);
         return builtinFailure('INVALID_INPUT', r.issues);
@@ -401,7 +427,7 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
         step('output', 'fail', `did not match the schema, so callers get 500 INTERNAL: ${out.issues.map((i) => i.message).join('; ')}`);
       }
     } catch (error) {
-      const spec = error instanceof ProcedureError ? proc.errors[error.code] : undefined;
+      const spec = error instanceof ProcedureError && Object.hasOwn(proc.errors, error.code) ? proc.errors[error.code] : undefined;
       if (error instanceof ProcedureError && spec) {
         result = {
           ok: false,
@@ -429,7 +455,7 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
       } catch (error) {
         onError(error, info('analytics.props'));
       }
-      const actorId = d.authn.kind === 'auth' && ctx !== null && ctx !== undefined ? d.authn.provider.actorId?.(ctx) : undefined;
+      const actorId = ctx !== null && ctx !== undefined ? actorOf(ctx) : undefined;
       const event: AnalyticsEvent = {
         event: spec.event,
         procedure: name,
@@ -441,7 +467,7 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
       };
       if (!result.ok) {event.code = result.code;}
       if (actorId) {event.actorId = actorId;}
-      step('analytics', 'pass', `${spec.event} ${JSON.stringify(props)}`);
+      step('analytics', 'pass', `${spec.event} ${shown(props)}`);
       waitUntil(
         Promise.resolve()
           .then(() => provider.track(event, exec.env))

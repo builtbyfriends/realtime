@@ -135,6 +135,8 @@ function typeOf(p: Prop): string {
 
 class UsageError extends Error {}
 
+const ownFlags = new Set(['url', 'token', 'help']);
+
 const globalOptions: ParseArgsOptionsConfig = {
   url: { type: 'string' },
   token: { type: 'string' },
@@ -203,10 +205,11 @@ function inputFromFlags(entry: CliProcedure, flags: Array<[string, string | true
     if (flag === 'json') {
       if (raw === true) {throw new UsageError('--json needs a value');}
       const parsed = parseJson(raw, '--json must be a JSON object');
-      if (isJsonObject(parsed)) {Object.assign(input, parsed);}
+      if (!isJsonObject(parsed)) {throw new UsageError('--json must be a JSON object');}
+      Object.assign(input, parsed);
       continue;
     }
-    const negated = flag.startsWith('no-') && byFlag.has(flag.slice(3));
+    const negated = !byFlag.has(flag) && flag.startsWith('no-') && byFlag.has(flag.slice(3));
     const key = byFlag.get(negated ? flag.slice(3) : flag);
     if (!key) {
       const known = [...byFlag.keys()].map((f) => `--${f}`).join(', ') || '(none)';
@@ -271,6 +274,12 @@ export async function run(io: Io): Promise<number> {
     const value = take(name);
     return typeof value === 'string' ? value : undefined;
   };
+  for (const name of ['url', 'token']) {
+    if (take(name) === true) {
+      io.stderr(`realtime: --${name} needs a value\n`);
+      return 2;
+    }
+  }
   const url = takeString('url') ?? io.env.REALTIME_URL;
   const token = takeString('token') ?? io.env.REALTIME_TOKEN;
   const basePath = io.env.REALTIME_BASE_PATH ?? '/rpc';
@@ -315,7 +324,13 @@ export async function run(io: Io): Promise<number> {
 
   let input: unknown;
   try {
-    input = inputFromFlags(entry, own.flags.filter(([k]) => !['url', 'token', 'help'].includes(k)));
+    const props = entry.input?.properties ?? new Map<string, Prop>();
+    const required = entry.input?.required ?? [];
+    const clash = [...props.keys()].find((k) => ownFlags.has(kebab(k)) && required.includes(k));
+    if (clash && !own.flags.some(([f]) => f === 'json')) {
+      throw new UsageError(`"${clash}" is also a flag of the CLI, so --${kebab(clash)} can't set it. Pass it with --json '{"${clash}": ...}'`);
+    }
+    input = inputFromFlags(entry, own.flags.filter(([k]) => !ownFlags.has(k)));
   } catch (error) {
     if (!(error instanceof UsageError)) {throw error;}
     io.stderr(`realtime: ${error.message}\n\n${commandHelp(entry)}`);
@@ -328,7 +343,11 @@ export async function run(io: Io): Promise<number> {
     headers: { 'content-type': 'application/json', 'x-realtime-surface': 'cli', ...authorization },
     body: input === undefined ? '' : JSON.stringify(input),
   });
-  const body: unknown = await res.json().catch(() => ({}));
+  const body: unknown = await res.json().catch(() => undefined);
+  if (res.ok && body === undefined) {
+    io.stderr(`realtime: the server sent a response that isn't JSON (HTTP ${res.status})\n`);
+    return 1;
+  }
   const failure = toFailure(body);
   if (res.ok && !failure) {
     const data: unknown = typeof body === 'object' && body !== null && 'data' in body ? body.data : undefined;

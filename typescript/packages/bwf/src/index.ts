@@ -43,3 +43,29 @@ export function appRegistry(): Registry {
   if (!current) {throw new Error('appRegistry() is only available inside a request, after the realtime middleware has loaded');}
   return current;
 }
+
+/** One AI tool call that came in over HTTP (`POST <basePath>/ai/run`) for a tool that needs approval. */
+export type AiRunCall = { request: Request; env: BwfEnv; tool: string; input: unknown };
+
+let approval: ((call: AiRunCall) => boolean | Promise<boolean>) | undefined;
+
+/**
+ * Decides whether a person approved an AI tool call that came in over HTTP. Call it once when the Worker starts, for
+ * example from a middleware file. Answer from something the caller can't write itself, such as an approval a person
+ * stored through your app. Without it, a tool that needs approval stays held over HTTP. The request body can't approve
+ * a call.
+ */
+export function approveAiRuns(decide: (call: AiRunCall) => boolean | Promise<boolean>): void {
+  approval = decide;
+}
+
+/** @internal The realtime middleware asks this for each held call. A decision that throws counts as no. */
+export async function aiRunApproved(call: AiRunCall): Promise<boolean> {
+  if (!approval) {return false;}
+  try {
+    return (await approval(call)) === true;
+  } catch (error) {
+    console.error('approveAiRuns failed', error);
+    return false;
+  }
+}

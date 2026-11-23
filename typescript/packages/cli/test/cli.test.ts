@@ -18,7 +18,31 @@ const search = procedure('contacts.search')
   .noAiTool({ reason: 'Not needed for this test suite' })
   .handler(({ input }) => ({ input }));
 
-const registry = defineRegistry([getContact, purge, ping, search], { analytics: memoryAnalytics() });
+const flagged = procedure('flags.set')
+  .auth(token)
+  .input(z.object({ cache: z.boolean().optional(), noCache: z.boolean().optional() }))
+  .noAuthz({ reason: 'Used only in this test' })
+  .output(z.object({ input: z.any() }))
+  .noErrors({ reason: 'Used only in this test' })
+  .noAnalytics({ reason: 'Used only in this test' })
+  .noMcp({ reason: 'Used only in this test' })
+  .cli({ command: 'flags set', description: 'Set flags' })
+  .noAiTool({ reason: 'Used only in this test' })
+  .handler(({ input }) => ({ input }));
+
+const clashing = procedure('links.add')
+  .auth(token)
+  .input(z.object({ url: z.string(), label: z.string().optional() }))
+  .noAuthz({ reason: 'Used only in this test' })
+  .output(z.object({ input: z.any() }))
+  .noErrors({ reason: 'Used only in this test' })
+  .noAnalytics({ reason: 'Used only in this test' })
+  .noMcp({ reason: 'Used only in this test' })
+  .cli({ command: 'links add', description: 'Add a link' })
+  .noAiTool({ reason: 'Used only in this test' })
+  .handler(({ input }) => ({ input }));
+
+const registry = defineRegistry([getContact, purge, ping, search, flagged, clashing], { analytics: memoryAnalytics() });
 const rpc = rpcHandler(registry);
 const f: typeof fetch = async (input, init) => rpc(new Request(input, init), env, { waitUntil: () => {} });
 
@@ -78,5 +102,47 @@ describe('cli', () => {
     const r = await cli('contacts', 'get', '--help');
     expect(r.out).toContain('--org-id <string> (required)');
     expect(r.out).toContain('NOT_FOUND (404) No such contact');
+  });
+
+  it('prefers an exact flag over a --no- negation', async () => {
+    expect(JSON.parse((await cli('flags', 'set', '--no-cache')).out).input).toEqual({ noCache: true });
+    expect(JSON.parse((await cli('flags', 'set', '--cache')).out).input).toEqual({ cache: true });
+  });
+
+  it('asks for --json when an input is named like a CLI flag', async () => {
+    const r = await cli('links', 'add', '--url', 'https://x.test');
+    expect(r.code).toBe(2);
+    expect(r.err).toContain('"url" is also a flag of the CLI');
+    expect(r.err).toContain('--json');
+    expect((await cli('links', 'add', '--label', 'a')).code).toBe(2);
+    const ok = await cli('links', 'add', '--json', '{"url":"https://x.test"}', '--label', 'a');
+    expect(ok).toMatchObject({ code: 0, err: '' });
+    expect(JSON.parse(ok.out).input).toEqual({ url: 'https://x.test', label: 'a' });
+  });
+
+  it('fails when a successful response is not JSON', async () => {
+    let out = '';
+    let err = '';
+    const html: typeof fetch = async (input, init) => (String(input).endsWith('manifest.json') ? f(input, init) : new Response('<html>ok</html>', { status: 200 }));
+    const code = await run({ argv: ['ping'], env: { REALTIME_URL: 'https://api.test', REALTIME_TOKEN: 'bob' }, fetch: html, stdout: (s) => (out += s), stderr: (s) => (err += s) });
+    expect(code).toBe(1);
+    expect(out).toBe('');
+    expect(err).toContain("isn't JSON");
+  });
+
+  it('fails when --url or --token has no value', async () => {
+    const url = await cli('contacts', 'search', '--query', 'x', '--url');
+    expect(url).toMatchObject({ code: 2, err: 'realtime: --url needs a value\n' });
+    const token = await cli('contacts', 'search', '--query', 'x', '--token');
+    expect(token).toMatchObject({ code: 2, err: 'realtime: --token needs a value\n' });
+  });
+
+  it('fails when --json is not an object', async () => {
+    for (const value of ['"text"', '[1]', 'null', '5']) {
+      const r = await cli('contacts', 'search', '--json', value);
+      expect(r.code).toBe(2);
+      expect(r.err).toContain('--json must be a JSON object');
+    }
+    expect(JSON.parse((await cli('contacts', 'search', '--json', '{"query":"q"}')).out).input).toEqual({ query: 'q' });
   });
 });

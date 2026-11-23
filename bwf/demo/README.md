@@ -80,7 +80,7 @@ error FORBIDDEN: Not allowed          (exit code 1)
 ```
 
 **AI tools.** `GET /rpc/ai/tools.json` returns definitions you can pass straight to `messages.create({ tools })`, for the four procedures that chose `.aiTool()`. `POST /rpc/ai/run` runs one tool call as the token's user:
-- `contacts_create` returns `needs_approval` until the call says `approved: true`.
+- `contacts_create` returns `needs_approval`. The caller can't approve its own call: the request body carries no approval. An app that wants held tools to run over HTTP calls `approveAiRuns()` from `@builtbyfriends/realtime-bwf` and answers from an approval a person stored.
 - Grace (org o2) searching org o1 gets `FORBIDDEN`.
 - `contacts_get` doesn't exist as a tool.
 
@@ -162,8 +162,8 @@ How it works: the registry has a `trace` channel that records each step of a cal
 
 ## Not in this demo yet
 
-- **Better Auth.** Tokens are SHA-256 hashes in a D1 table read by `apiTokens()`. Sessions and Better Auth API keys come next (PLAN.md, build step 2).
-- **Names from file paths.** Procedures still name themselves (`procedure('contacts.get')`). That needs the small core change in the plan.
+- **Better Auth.** Tokens are SHA-256 hashes in a D1 table read by `apiTokens()`. Sessions and Better Auth API keys come next.
+- **Names from file paths.** Procedures still name themselves (`procedure('contacts.get')`). That needs a small core change.
 - **`npx realtime init`.** The middleware file and config line are written by hand here.
 - **Real deploy.** Not run with `bwf deploy` to Cloudflare, which needs your account. The load gate was checked by starting the built Worker in Miniflare, which uses the same runtime as Cloudflare.
 - **Dev analytics logging.** In dev, analytics events are also printed to the console. That's how the demo collects them; production writes only to Analytics Engine.

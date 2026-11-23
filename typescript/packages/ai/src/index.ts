@@ -56,7 +56,8 @@ export type ToolRunResult =
 /**
  * Runs one tool call through the full pipeline. The caller is whoever sent `exec.request`,
  * so an agent acting for a user gets exactly that user's permissions. A tool that chose
- * `needsApproval: true` returns `needs_approval` until the caller passes `approved: true`.
+ * `needsApproval: true` returns `needs_approval` until the caller passes `approved: true`. Set `approved` from something
+ * the agent can't write, such as a person's answer in your app. Don't copy it from a request body.
  */
 export async function runTool(
   registry: Registry,

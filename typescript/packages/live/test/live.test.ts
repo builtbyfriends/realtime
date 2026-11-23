@@ -227,4 +227,115 @@ describe('live store', () => {
     await live.refetch('messages.list', (i: any) => i.channel === 'b');
     expect(call.mock.calls.length).toBe(before + 1);
   });
+
+  describe('reported races', () => {
+    function gated() {
+      const gates: Array<(v: unknown) => void> = [];
+      const call = vi.fn(() => new Promise((res) => gates.push(res)));
+      const t = fakeTransport();
+      const live = createLive<any>({ client: { call }, transport: t.transport, topics: { 'messages.list': () => ['messages'] } });
+      return { gates, call, t, live };
+    }
+
+    it('keeps one fetch running when an old fetch ends after the watcher left and came back', async () => {
+      const { gates, call, t, live } = gated();
+      const q = live.query('messages.list', {});
+      const stop = q.subscribe(() => {});
+      await flush();
+      stop();
+      q.subscribe(() => {});
+      await flush();
+      expect(call).toHaveBeenCalledTimes(2);
+      gates[0]('old');
+      await flush();
+      t.emit('messages');
+      await flush();
+      expect(call).toHaveBeenCalledTimes(2);
+      gates[1]('new');
+      await flush();
+      expect(call).toHaveBeenCalledTimes(3);
+    });
+
+    it('undoes optimistic changes and sends nothing when the optimistic callback throws', async () => {
+      const call = vi.fn(async (name: string) => (name === 'messages.list' ? ['hi'] : null));
+      const live = createLive<any>({ client: { call }, transport: fakeTransport().transport, topics: { 'messages.list': () => ['messages'] } });
+      const q = live.query('messages.list', { channel: 'a' });
+      q.subscribe(() => {});
+      await flush();
+      const sent = live.mutate('messages.send', {}, {
+        optimistic: (store: any) => {
+          store.update('messages.list', { channel: 'a' }, (list: Array<string>) => [...list, 'yo']);
+          throw new Error('bad guess');
+        },
+      });
+      await expect(sent).rejects.toThrow('bad guess');
+      expect(q.getSnapshot().data).toEqual(['hi']);
+      expect(call.mock.calls.some(([name]) => name === 'messages.send')).toBe(false);
+    });
+
+    it('starts an enabled watcher that mounts after a disabled one on the same query', async () => {
+      const { call, live } = setup();
+      live.query('messages.list', { channel: 'a' }, { enabled: false }).subscribe(() => {});
+      const on = live.query('messages.list', { channel: 'a' });
+      on.subscribe(() => {});
+      await flush();
+      expect(call).toHaveBeenCalledTimes(1);
+      expect(on.getSnapshot().status).toBe('ready');
+    });
+
+    it('resolves refetch only after a fetch that started after the call', async () => {
+      const { gates, call, live } = gated();
+      const q = live.query('messages.list', {});
+      q.subscribe(() => {});
+      await flush();
+      let done = false;
+      const p = q.refetch().then(() => void (done = true));
+      gates[0]('stale');
+      await flush();
+      expect(call).toHaveBeenCalledTimes(2);
+      expect(done).toBe(false);
+      gates[1]('fresh');
+      await p;
+      expect(q.getSnapshot().data).toBe('fresh');
+    });
+
+    it('does not let an earlier gc timer cut the cache window short', async () => {
+      const { live } = setup({ cacheMs: 1000 });
+      const stop = live.query('messages.list', { channel: 'a' }).subscribe(() => {});
+      await flush();
+      stop();
+      await vi.advanceTimersByTimeAsync(500);
+      live.query('messages.list', { channel: 'a' }, { enabled: false }).subscribe(() => {})();
+      await vi.advanceTimersByTimeAsync(600);
+      expect(live.query('messages.list', { channel: 'a' }).getSnapshot().status).toBe('ready');
+    });
+
+    it('does not let an old entry delete a newer one with the same key', async () => {
+      const { live } = setup({ cacheMs: 1000 });
+      const old = live.query('messages.list', { channel: 'a' });
+      old.subscribe(() => {})();
+      await vi.advanceTimersByTimeAsync(1500);
+      const fresh = live.query('messages.list', { channel: 'a' });
+      fresh.subscribe(() => {});
+      await flush();
+      old.subscribe(() => {})();
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(live.query('messages.list', { channel: 'a' }).getSnapshot().status).toBe('ready');
+    });
+
+    it('ignores an event that reaches an entry after its last watcher left', async () => {
+      const { call, t, live } = setup();
+      let late = () => {};
+      const slow: LiveTransport = { ...t.transport, subscribe: (topic, cb) => ((late = cb), t.transport.subscribe(topic, cb)) };
+      const l = createLive<any>({ client: { call }, transport: slow, topics: { x: () => ['t'] } });
+      const stop = l.query('x', {}).subscribe(() => {});
+      await flush();
+      stop();
+      const before = call.mock.calls.length;
+      late();
+      await flush();
+      expect(call.mock.calls.length).toBe(before);
+      void live;
+    });
+  });
 });

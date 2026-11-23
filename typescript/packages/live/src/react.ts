@@ -16,7 +16,7 @@ export type UseQueryResult<T> = QueryState<T> & {
  *   const messages = useQuery('messages.list', { channel });   // refetches when its topics fire
  *   const send = useMutation('messages.send');
  *   send.mutate({ channel, body }, {
- *     optimistic: (store) => store.update('messages.list', { channel }, (list) => [...list, body]),
+ *     optimistic: (store) => store.update('messages.list', { channel }, (list) => [...list, { _id: 'pending', _creationTime: Date.now(), channel, body }]),
  *   });
  */
 export function createLiveHooks<R extends Typed>(live: Live<R>) {

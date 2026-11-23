@@ -56,8 +56,7 @@ export function currentEpoch(storage: DataStorage): string {
   return run<{ value: string }>(storage, `SELECT value FROM _meta WHERE key='epoch'`)[0]?.value ?? '';
 }
 
-/** The latest position, or 0 before the first synced change. */
-export function currentSeq(storage: DataStorage): number {
+function currentSeq(storage: DataStorage): number {
   return Number(run<{ value: string }>(storage, `SELECT value FROM _meta WHERE key='seq'`)[0]?.value ?? 0);
 }
 
@@ -76,8 +75,13 @@ type Pending = { table: string; id: string; before: Array<string>; after: JsonOb
 
 function groupsOf(def: TableDef, doc: JsonObject | null): Array<string> {
   const sync = def.sync;
-  const g = doc && sync ? sync.group(doc) : null;
-  return g === null ? [] : typeof g === 'string' ? [g] : [...new Set(g)];
+  const g: unknown = doc && sync ? sync.group(doc) : null;
+  if (g === null || g === undefined) {return [];}
+  if (typeof g === 'string') {return [g];}
+  if (!Array.isArray(g) || !g.every((x: unknown): x is string => typeof x === 'string')) {
+    throw new Error('sync.group must return a string, a list of strings or null');
+  }
+  return [...new Set(g)];
 }
 
 /** Collects one mutation's changes to synced tables, and writes them to the index inside its transaction. */
@@ -129,18 +133,27 @@ export class ChangeRecorder {
   }
 }
 
+const MAX_PULL = 500;
+
+/** The page size a pull uses: what was asked, as a whole number from 1 to 500. 500 when nothing sensible was asked. */
+export function pullLimit(asked?: number): number {
+  return typeof asked === 'number' && Number.isFinite(asked) && asked >= 1 ? Math.min(Math.floor(asked), MAX_PULL) : MAX_PULL;
+}
+
 /**
  * Everything in `groups` that changed after position `after`, oldest first, up to `limit` documents. A device keeps the
  * returned `seq` and pulls from it after a reconnect. `after: 0` loads the groups from scratch, deletes left out.
  */
-export function pull(storage: DataStorage, schema: Schema, groups: ReadonlyArray<string>, after: number, limit = 500): PullResult {
+export function pull(storage: DataStorage, schema: Schema, groups: ReadonlyArray<string>, after: number, asked?: number): PullResult {
   const now = currentSeq(storage);
   if (!groups.length) {return { seq: now, changes: [], more: false };}
-  const marks = groups.map(() => '?').join(',');
+  const limit = pullLimit(asked);
+  // Decision: the groups go in as one JSON parameter, because a Durable Object's SQLite takes at most 100 bound parameters.
+  const mine = JSON.stringify(groups);
   const rows = run<{ tbl: string; id: string; grp: string; seq: number; deleted: number }>(
     storage,
-    `SELECT tbl,id,grp,seq,deleted FROM _changes WHERE grp IN (${marks}) AND seq > ? ${after === 0 ? 'AND deleted = 0' : ''} ORDER BY seq LIMIT ?`,
-    ...groups,
+    `SELECT tbl,id,grp,seq,deleted FROM _changes WHERE grp IN (SELECT value FROM json_each(?)) AND seq > ? ${after === 0 ? 'AND deleted = 0' : ''} ORDER BY seq LIMIT ?`,
+    mine,
     after,
     limit + 1,
   );
@@ -154,7 +167,7 @@ export function pull(storage: DataStorage, schema: Schema, groups: ReadonlyArray
     const whole = page.filter((r) => r.seq < last);
     page = whole.length
       ? whole
-      : run(storage, `SELECT tbl,id,grp,seq,deleted FROM _changes WHERE grp IN (${marks}) AND seq = ? ${after === 0 ? 'AND deleted = 0' : ''}`, ...groups, last);
+      : run(storage, `SELECT tbl,id,grp,seq,deleted FROM _changes WHERE grp IN (SELECT value FROM json_each(?)) AND seq = ? ${after === 0 ? 'AND deleted = 0' : ''}`, mine, last);
   }
   const changes: Array<Change> = page.map((r) => {
     const def = schema[r.tbl];

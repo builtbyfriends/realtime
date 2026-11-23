@@ -11,6 +11,8 @@ export function memoryStorage() {
     db,
     sql: {
       exec(query, ...bindings) {
+        // Decision: a Durable Object's SQLite takes at most 100 bound parameters, so the stand-in refuses more too.
+        if (bindings.length > 100) {throw new Error('too many SQL variables');}
         const stmt = db.prepare(query);
         const rows = (stmt.all(...(bindings.map(toBinding) as any)) as Array<any>).map((row) => {
           for (const k of Object.keys(row)) {
