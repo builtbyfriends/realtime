@@ -20,18 +20,24 @@ export function bearerAuth<Ctx, Env = unknown>(opts: {
   };
 }
 
-/** Tries each provider in order and uses the first that resolves a caller. */
+/** Tries each provider in order and uses the first that resolves a caller. That provider also names the actor. */
 export function anyOf<Ctx, Env = unknown>(name: string, ...providers: AuthProvider<Ctx, Env>[]): AuthProvider<Ctx, Env> {
+  const resolvedBy = new WeakMap<object, AuthProvider<Ctx, Env>>();
   return {
     name,
     async resolve(request, env) {
       for (const p of providers) {
         const ctx = await p.resolve(request, env);
-        if (ctx != null) return ctx;
+        if (ctx != null) {
+          if (typeof ctx === 'object') resolvedBy.set(ctx, p);
+          return ctx;
+        }
       }
       return null;
     },
     actorId: (ctx) => {
+      const owner = typeof ctx === 'object' && ctx !== null ? resolvedBy.get(ctx) : undefined;
+      if (owner) return owner.actorId?.(ctx);
       for (const p of providers) {
         const id = p.actorId?.(ctx);
         if (id) return id;

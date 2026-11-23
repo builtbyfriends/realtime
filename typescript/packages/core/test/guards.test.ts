@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { bearerAuth, defineRegistry } from '@builtbyfriends/realtime';
+import { anyOf, bearerAuth, defineRegistry } from '@builtbyfriends/realtime';
 import { memoryAnalytics } from '@builtbyfriends/realtime-analytics';
 import { env, procedure, req, type Env, type User } from './fixtures.js';
 
@@ -56,5 +56,17 @@ describe('callbacks that throw', () => {
     const { call, onError } = setup();
     expect(await call('things.check', { n: 1 })).toMatchObject({ ok: false, status: 500, code: 'INTERNAL' });
     expect(onError).toHaveBeenCalled();
+  });
+});
+
+describe('anyOf', () => {
+  it('asks the provider that resolved the caller for the actor id', async () => {
+    type Session = { session: { userId: string } };
+    type Key = { key: { owner: string } };
+    const session = { name: 'session', resolve: async () => null, actorId: (c: Session | Key) => (c as Session).session.userId };
+    const key = { name: 'key', resolve: async () => ({ key: { owner: 'u-1' } }), actorId: (c: Session | Key) => (c as Key).key.owner };
+    const either = anyOf<Session | Key>('either', session, key);
+    const ctx = await either.resolve(req(), env);
+    expect(either.actorId!(ctx!)).toBe('u-1');
   });
 });
