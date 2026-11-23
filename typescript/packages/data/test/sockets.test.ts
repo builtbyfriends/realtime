@@ -274,6 +274,16 @@ describe('live queries over the socket', () => {
     for (const ws of mine) expect(ws.sent.at(-1)).toEqual({ type: 'result', id: 'q', value: [{ text: 'one' }] });
   });
 
+  it('refuses a query with no name before the app is asked', async () => {
+    const { sockets, tick, runs } = setup();
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: [] });
+    sockets.message(a, JSON.stringify({ type: 'query', id: 'q', input: { all: true } }));
+    await tick();
+    expect(a.sent).toEqual([{ type: 'result', id: 'q', denied: true }]);
+    expect(runs).toEqual([]);
+  });
+
   it('sends nothing when the answer is the same, and stops after unquery', async () => {
     const { sockets, m, tick } = setup();
     await m('join', { room: 'x', user: 'ann' });
@@ -318,34 +328,64 @@ describe('sockets that go wrong', () => {
       acceptWebSocket: (ws: any, tags: string[] = []) => void all.push({ ws, tags }),
       getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
     };
-    const sockets = new SyncSockets(state, { pull: (_a, g, after, l) => engine.pull(g, after, l), view: (a, c) => engine.view(a, c), access: (a, g) => engine.access(a, g) });
+    const view = (a: string, c: Parameters<typeof engine.view>[1]) => {
+      if (a === 'broken') throw new Error('hook failed');
+      return engine.view(a, c);
+    };
+    const sockets = new SyncSockets(state, { pull: (_a, g, after, l) => engine.pull(g, after, l), view, access: (a, g) => engine.access(a, g) });
     engine.listen((batch) => sockets.broadcast(batch));
     return { sockets, storage, add: (room: string, text: string) => engine.run('mutation', 'add', { room, text }) };
   }
 
-  it('closes the socket whose view threw, and still sends the commit to the sockets after it', async () => {
+  it('closes the socket the object could not serve, and still sends the commit to the sockets after it', async () => {
     const { sockets, add } = setup();
     const bad = fakeSocket();
     const good = fakeSocket();
-    sockets.accept(bad, { actor: 'bad', groups: ['room:x'] });
+    sockets.accept(bad, { actor: 'broken', groups: ['room:x'] });
     sockets.accept(good, { actor: 'ann', groups: ['room:x'] });
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await add('x', 'boom');
+    await add('x', 'hi');
     logged.mockRestore();
     expect(bad.closed).toEqual([1011]);
     expect(bad.sent).toEqual([]);
-    expect(good.sent).toMatchObject([{ type: 'changes', seq: 1, changes: [{ doc: { text: 'boom' } }] }]);
+    expect(good.sent).toMatchObject([{ type: 'changes', seq: 1, changes: [{ doc: { text: 'hi' } }] }]);
   });
 
   it('closes the socket when answering its message throws, and takes the message as its own', async () => {
     const { sockets, add } = setup();
-    await add('x', 'boom');
+    await add('x', 'hi');
     const bad = fakeSocket();
-    sockets.accept(bad, { actor: 'bad', groups: ['room:x'] });
+    sockets.accept(bad, { actor: 'broken', groups: ['room:x'] });
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(sockets.message(bad, JSON.stringify({ type: 'pull', after: 0, id: 1 }))).toBe(true);
     logged.mockRestore();
     expect(bad.closed).toEqual([1011]);
+  });
+
+  it('leaves out the one document whose view throws, and sends the rest of the page', async () => {
+    const { sockets, add } = setup();
+    await add('x', 'boom');
+    await add('x', 'fine');
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'bad', groups: ['room:x'] });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    sockets.message(a, JSON.stringify({ type: 'pull', after: 0, id: 1 }));
+    logged.mockRestore();
+    expect(a.closed).toEqual([]);
+    expect(a.sent[0]).toMatchObject({ type: 'pull', seq: 2, changes: [{ doc: { text: 'fine' } }] });
+    expect(a.sent[0].changes).toHaveLength(1);
+  });
+
+  it('refuses a header that does not name an actor and its groups', async () => {
+    const data = defineData({ schema, functions: () => ({}) });
+    class Base {}
+    const Obj = data.durableObject(Base as never) as unknown as new (ctx: unknown, env: unknown) => { fetch(r: Request): Response | Promise<Response> };
+    const ctx = { storage: memoryStorage(), blockConcurrencyWhile: async (fn: () => Promise<void>) => fn(), acceptWebSocket: () => {}, getWebSockets: () => [] };
+    const object = new Obj(ctx, {});
+    for (const header of ['not json', '{"actor":7,"groups":[]}', '{"actor":"ann","groups":"team:1"}', 'null']) {
+      const res = await object.fetch(new Request('https://x/sync', { headers: { upgrade: 'websocket', 'x-realtime-sync': header } }));
+      expect(res.status).toBe(400);
+    }
   });
 
   it('answers a pull whatever limit the device sends', async () => {

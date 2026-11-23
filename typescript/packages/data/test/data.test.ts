@@ -197,7 +197,7 @@ describe('schema edges', () => {
 
   it('refuses two names that would share one SQLite name', () => {
     const clash = defineSchema({ a: table<{ x: string }>({ indexes: { b_c: ['x'] } }), a_b: table<{ x: string }>({ indexes: { c: ['x'] } }) });
-    expect(() => defineData({ schema: clash, functions: () => ({}) }).engine(memoryStorage()).init()).toThrow('would share the name "i_a_b_c"');
+    expect(() => defineData({ schema: clash, functions: () => ({}) }).engine(memoryStorage()).init()).toThrow(/would share the name "i_a_b_c_/);
   });
 });
 
@@ -368,21 +368,49 @@ describe('scheduler', () => {
 });
 
 describe('a job that takes the object down', () => {
-  it('counts the run as an attempt before the handler starts, and parks the job once they are used up', async () => {
+  it('parks the job once ten runs in a row never ended, without spending its attempts', async () => {
     const { engine, calls } = setup();
     engine.scheduler().runAfter(0, 'hang', null, { id: 'h' });
     const crashed = () => {
       void engine.alarm();
-      return new Promise((r) => setTimeout(r, 5));
+      return new Promise((r) => setTimeout(r, 2));
     };
-    await crashed();
-    expect(engine.scheduler().get('h')).toMatchObject({ status: 'pending', attempts: 1 });
-    await crashed();
-    expect(engine.scheduler().get('h')).toMatchObject({ status: 'pending', attempts: 2 });
+    for (let i = 0; i < 10; i++) await crashed();
+    expect(engine.scheduler().get('h')).toMatchObject({ status: 'pending', attempts: 0 });
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     await crashed();
     logged.mockRestore();
     expect(engine.scheduler().get('h')).toMatchObject({ status: 'failed', error: expect.stringContaining('stopped before it finished') });
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('guards on functions and jobs', () => {
+  it('refuses a mutation that returns a promise, and rolls back what it wrote', async () => {
+    const schema = defineSchema({ notes: table<{ text: string }>({}) });
+    const data = defineData({
+      schema,
+      functions: ({ query, mutation }) => ({
+        later: mutation(async (ctx) => void ctx.db.insert('notes', { text: 'x' })),
+        count: query((ctx) => ctx.db.query('notes').collect().length),
+      }),
+    });
+    const engine = data.engine(memoryStorage());
+    engine.init();
+    await expect(engine.run('mutation', 'later', undefined)).rejects.toThrow('returned a promise');
+    expect(await engine.run('query', 'count', undefined)).toBe(0);
+  });
+
+  it('does not run a job that another job cancelled in the same pass', async () => {
+    const { engine, calls } = setup();
+    const scheduler = engine.scheduler();
+    scheduler.runAfter(0, 'ping', { n: 1 }, { id: 'a' });
+    scheduler.runAfter(0, 'ping', { n: 2 }, { id: 'b' });
+    const due = scheduler.due(Date.now() + 1, 10);
+    scheduler.cancel('b');
+    expect(due).toHaveLength(2);
+    expect(scheduler.started(due[1]!)).toBeNull();
+    expect(scheduler.started(due[0]!)).toBe(1);
     expect(calls).toEqual([]);
   });
 });

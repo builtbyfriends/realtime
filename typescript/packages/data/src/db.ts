@@ -365,7 +365,7 @@ export function schemaSignature(schema: Schema): string {
 }
 
 // Decision: names are joined with `_`, which they may also contain, so table `a` with index `b_c` and table `a_b` with
-// index `c` would share one SQLite name. That is refused here, since renaming would rebuild every index already made.
+// index `c` on the same fields would share one SQLite name. That is refused here, since renaming would rebuild every index already made.
 function distinctNames(schema: Schema): void {
   const seen = new Map<string, string>();
   const claim = (sqlName: string, what: string) => {
@@ -374,7 +374,7 @@ function distinctNames(schema: Schema): void {
     seen.set(sqlName, what);
   };
   for (const [table, def] of Object.entries(schema)) {
-    for (const name of Object.keys(def.indexes ?? {})) claim(`i_${table}_${name}`, `index "${name}" on "${table}"`);
+    for (const [name, fields] of Object.entries(def.indexes ?? {})) claim(`i_${table}_${name}_${hash(fields.join(','))}`, `index "${name}" on "${table}"`);
     for (const name of Object.keys(def.search ?? {})) claim(`fts_${table}_${name}`, `search index "${name}" on "${table}"`);
     for (const name of Object.keys(def.vectors ?? {})) claim(`vec_${table}_${name}`, `vector index "${name}" on "${table}"`);
   }

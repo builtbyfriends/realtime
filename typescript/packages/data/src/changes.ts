@@ -55,8 +55,7 @@ export function currentEpoch(storage: DataStorage): string {
   return run<{ value: string }>(storage, `SELECT value FROM _meta WHERE key='epoch'`)[0]?.value ?? '';
 }
 
-/** The latest position, or 0 before the first synced change. */
-export function currentSeq(storage: DataStorage): number {
+function currentSeq(storage: DataStorage): number {
   return Number(run<{ value: string }>(storage, `SELECT value FROM _meta WHERE key='seq'`)[0]?.value ?? 0);
 }
 
@@ -72,8 +71,11 @@ export function visible(def: TableDef, doc: Record<string, unknown>): Record<str
 type Pending = { table: string; id: string; before: string[]; after: Record<string, unknown> | null };
 
 function groupsOf(def: TableDef, doc: Record<string, unknown> | null): string[] {
-  const g = doc ? def.sync!.group(doc) : null;
-  return g === null ? [] : typeof g === 'string' ? [g] : [...new Set(g)];
+  const g: unknown = doc ? def.sync!.group(doc) : null;
+  if (g === null || g === undefined) return [];
+  if (typeof g === 'string') return [g];
+  if (!Array.isArray(g) || !g.every((x) => typeof x === 'string')) throw new Error('sync.group must return a string, a list of strings or null');
+  return [...new Set(g as string[])];
 }
 
 /** Collects one mutation's changes to synced tables, and writes them to the index inside its transaction. */

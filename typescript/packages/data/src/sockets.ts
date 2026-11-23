@@ -22,12 +22,12 @@ import { pullLimit, type Change, type ChangeBatch, type PullResult } from './cha
  *   object → device  {"type":"topics","topics":["pins:channel:x"]}   after a commit that touched them: refetch
  *   object → device  {"type":"unheard","topics":["pins:channel:x"]}   no longer allowed: hear it some other way
  *   device → object  {"type":"query","id":"q1","name":"pins.list","input":{"channelId":"x"},"topics":["pins:channel:x"]}
- *   object → device  {"type":"result","id":"q1","value":{...}}   now, and again after a commit that touched its topics
+ *   object → device  {"type":"result","id":"q1","value":{...}}   now, and again when a commit that touched its topics changes the answer
  *   object → device  {"type":"result","id":"q1","denied":true}   refused or no longer allowed: fetch it some other way
- *   object → device  {"type":"result","id":"q1","error":"Forbidden"}   the query threw
+ *   object → device  {"type":"result","id":"q1","error":"Forbidden"}   the query threw, or its answer is too large for a message
  *   device → object  {"type":"unquery","ids":["q1"]}
  *
- * A socket the object couldn't serve (a view threw, its groups no longer fit) is closed with code 1011. The device loads
+ * A socket the object couldn't serve (a hook threw, its groups no longer fit) is closed with code 1011. The device loads
  * what it shows again and reconnects, as it does after any close. A pull page holds up to 500 changes, and fewer when
  * they wouldn't fit in one message.
  *
@@ -209,25 +209,33 @@ export class SyncSockets {
   recheck(): void {
     const { access, topicAccess } = this.hooks;
     for (const ws of this.state.getWebSockets()) {
-      const who = identity(ws);
-      if (!who) continue;
-      const topics = who.topics ?? [];
-      const kept = who.groups.length && access ? access(who.actor, who.groups) : [];
-      const heard = topics.length && topicAccess ? topicAccess(who.actor, topics) : [];
-      const queries = who.queries ?? [];
-      const asked = [...new Set(queries.flatMap((q) => q.topics))];
-      const allowed = new Set(asked.length && topicAccess ? topicAccess(who.actor, asked) : []);
-      const dropped = queries.filter((q) => !q.topics.every((t) => allowed.has(t)));
-      const removed = who.groups.filter((g) => !kept.includes(g));
-      const deaf = topics.filter((t) => !heard.includes(t));
-      if (!removed.length && !deaf.length && !dropped.length) continue;
-      ws.serializeAttachment({ ...who, groups: who.groups.filter((g) => kept.includes(g)), topics: topics.filter((t) => heard.includes(t)), queries: queries.filter((q) => !dropped.includes(q)) });
-      if (removed.length) trySend(ws, { type: 'groups', added: [], removed });
-      if (deaf.length) trySend(ws, { type: 'unheard', topics: deaf });
-      for (const q of dropped) {
-        this.sent.get(ws)?.delete(q.id);
-        trySend(ws, { type: 'result', id: q.id, denied: true });
+      try {
+        this.recheckOne(ws, access, topicAccess);
+      } catch (e) {
+        fail(ws, 'sync recheck failed', e);
       }
+    }
+  }
+
+  private recheckOne(ws: Socket, access: SyncHooks['access'], topicAccess: SyncHooks['topicAccess']): void {
+    const who = identity(ws);
+    if (!who) return;
+    const topics = who.topics ?? [];
+    const kept = who.groups.length && access ? access(who.actor, who.groups) : [];
+    const heard = topics.length && topicAccess ? topicAccess(who.actor, topics) : [];
+    const queries = who.queries ?? [];
+    const asked = [...new Set(queries.flatMap((q) => q.topics))];
+    const allowed = new Set(asked.length && topicAccess ? topicAccess(who.actor, asked) : []);
+    const dropped = queries.filter((q) => !q.topics.every((t) => allowed.has(t)));
+    const removed = who.groups.filter((g) => !kept.includes(g));
+    const deaf = topics.filter((t) => !heard.includes(t));
+    if (!removed.length && !deaf.length && !dropped.length) return;
+    ws.serializeAttachment({ ...who, groups: who.groups.filter((g) => kept.includes(g)), topics: topics.filter((t) => heard.includes(t)), queries: queries.filter((q) => !dropped.includes(q)) });
+    if (removed.length) trySend(ws, { type: 'groups', added: [], removed });
+    if (deaf.length) trySend(ws, { type: 'unheard', topics: deaf });
+    for (const q of dropped) {
+      this.sent.get(ws)?.delete(q.id);
+      trySend(ws, { type: 'result', id: q.id, denied: true });
     }
   }
 
@@ -271,9 +279,9 @@ export class SyncSockets {
     const id = typeof msg.id === 'string' || typeof msg.id === 'number' ? String(msg.id) : null;
     if (id === null) return;
     const name = typeof msg.name === 'string' ? msg.name : '';
-    const topics = strings(msg.topics);
+    const topics = strings(msg.topics).slice(0, MAX_ASKED);
     const allowed = name && this.hooks.query && this.hooks.topicAccess ? this.hooks.topicAccess(who.actor, topics) : [];
-    const ok = allowed.length === topics.length;
+    const ok = !!name && allowed.length === topics.length;
     const query: LiveQuery = { id, name, input: msg.input ?? null, topics };
     if (!ok || !this.save(ws, { ...who, queries: [...(who.queries ?? []).filter((q) => q.id !== id), query] })) {
       trySend(ws, { type: 'result', id, denied: true });
@@ -330,7 +338,9 @@ export class SyncSockets {
       const result = this.hooks.pull(actor, groups, after, size);
       const page = { ...result, changes: this.see(actor, result.changes) };
       // Decision: a page that wouldn't fit in one message is read again at half the size. A page of one commit can't shrink.
-      if (size === 1 || result.changes.length <= 1 || bytes(page.changes) <= MAX_RESULT) return page;
+      const fits = bytes(page.changes) <= MAX_RESULT;
+      if (!fits && result.changes.length <= 1) throw new Error('one change is too large for a message');
+      if (fits || size === 1) return page;
       size = Math.max(1, Math.floor(Math.min(size, result.changes.length) / 2));
     }
   }
