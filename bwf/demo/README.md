@@ -80,7 +80,7 @@ error FORBIDDEN: Not allowed          (exit code 1)
 ```
 
 **AI tools.** `GET /rpc/ai/tools.json` returns definitions you can pass straight to `messages.create({ tools })`, for the four procedures that chose `.aiTool()`. `POST /rpc/ai/run` runs one tool call as the token's user:
-- `contacts_create` returns `needs_approval` until the call says `approved: true`.
+- `contacts_create` returns `needs_approval`. The caller can't approve its own call: the request body carries no approval. An app that wants held tools to run over HTTP calls `approveAiRuns()` from `@builtbyfriends/realtime-bwf` and answers from an approval a person stored.
 - Grace (org o2) searching org o1 gets `FORBIDDEN`.
 - `contacts_get` doesn't exist as a tool.
 

@@ -1,10 +1,10 @@
 /// <reference path="./virtual.d.ts" />
 import { rpcHandler } from '@builtbyfriends/realtime-http';
 import { mcpHandler } from '@builtbyfriends/realtime-mcp';
-import { anthropicTools, runTool, toolResultContent } from '@builtbyfriends/realtime-ai';
+import { anthropicTools, runTool, toolInfo, toolResultContent } from '@builtbyfriends/realtime-ai';
 import { app, registry } from 'virtual:realtime/registry';
 import { createDevtools } from './devtools.js';
-import { setAppRegistry } from './index.js';
+import { aiRunApproved, setAppRegistry } from './index.js';
 
 // Decision: built when the Worker starts. bwf loads middleware eagerly, so a registry problem (an
 // unfinished procedure, a weak reason, a duplicate name) stops the Worker and Cloudflare rejects the deploy.
@@ -41,9 +41,13 @@ async function handle(request: Request, env: any, waitUntil: (p: Promise<unknown
   // anthropicTools(registry) and runTool(...) from @builtbyfriends/realtime-ai directly.
   if (path === `${app.basePath}/ai/tools.json` && request.method === 'GET') return new Response(tools, { headers: { 'content-type': 'application/json' } });
   if (path === `${app.basePath}/ai/run` && request.method === 'POST') {
-    const body = (await request.json().catch(() => null)) as { tool?: string; input?: unknown; approved?: boolean } | null;
-    if (!body?.tool) return json({ error: { code: 'INVALID_INPUT', message: 'Send { tool, input, approved? }' } }, 400);
-    const run = await runTool(registry, body.tool, body.input, { request, env, waitUntil, approved: body.approved === true });
+    const body = (await request.json().catch(() => null)) as { tool?: unknown; input?: unknown } | null;
+    if (typeof body?.tool !== 'string' || !body.tool) return json({ error: { code: 'INVALID_INPUT', message: 'Send { tool, input }' } }, 400);
+    const { tool, input } = body;
+    // Decision: the caller can't approve its own call, so the body carries no approval. The app decides with approveAiRuns().
+    const needsApproval = toolInfo(registry).some((t) => t.name === tool && t.needsApproval);
+    const approved = needsApproval && (await aiRunApproved({ request, env, tool, input }));
+    const run = await runTool(registry, tool, input, { request, env, waitUntil, approved });
     return json({ status: run.status, tool_result: toolResultContent(run) });
   }
 
