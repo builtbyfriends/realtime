@@ -23,7 +23,7 @@ const send = procedure('messages.send')
   .noAiTool({ reason: 'Example without agent tools' })
   .handler(async ({ input, env }) => {
     const client = data.client(env.DEPLOYMENT);
-    if (input.remindInMs) return client.mutate.sendWithReminder({ ...input, remindInMs: input.remindInMs });
+    if (input.remindInMs) {return client.mutate.sendWithReminder({ ...input, remindInMs: input.remindInMs });}
     return { id: await client.mutate.send(input) };
   });
 

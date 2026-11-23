@@ -26,7 +26,7 @@ describe('POST /ai/run', () => {
   });
 
   it('runs a held tool once the app\'s own check approves it', async () => {
-    const seen: string[] = [];
+    const seen: Array<string> = [];
     approveAiRuns(({ tool }) => (seen.push(tool), true));
     expect((await run({ tool: 'cache_purge' })).status).toBe('ok');
     expect(seen).toEqual(['cache_purge']);

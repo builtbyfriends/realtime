@@ -11,13 +11,17 @@ export type ConnectLiveStream = (
     retryDelay?: number;
     headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
     fetch?: typeof fetch;
+    // oxlint-disable-next-line typescript/no-explicit-any -- stands in for the host's own EventSource type, which this package can't import
     eventSource?: new (url: string, init?: { withCredentials?: boolean }) => any;
-    onError?: (error: any) => void;
+    onError?: (error: unknown) => void;
   },
 ) => {
-  subscribe(options: { id: string; topic: string; onEvent?: (event: any) => void }): Promise<() => Promise<void>>;
+  subscribe(options: { id: string; topic: string; onEvent?: (event: unknown) => void }): Promise<() => Promise<void>>;
   close(): void;
 };
+
+type StreamSource = { addEventListener(type: string, listener: () => void): void };
+type StreamSourceConstructor = new (url: string, init?: { withCredentials?: boolean }) => StreamSource;
 
 export type BwfTransportOptions = {
   /** `connectLiveStream` from `@builtbyfriends/bwf/live/client`. */
@@ -52,17 +56,20 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
   let opens = 0;
 
   function open() {
-    if (stream) return stream;
-    const Native = (options.headers
+    if (stream) {return stream;}
+    const Native: StreamSourceConstructor | undefined = options.headers
       ? fetchEventSource({ headers: options.headers, fetch: options.fetch })
-      : (globalThis as any).EventSource) as new (url: string, init?: { withCredentials?: boolean }) => any;
-    if (!Native) throw new Error('EventSource is not available here; live queries need a browser (or a polyfill)');
+      : globalThis.EventSource;
+    if (!Native) {throw new Error('EventSource is not available here; live queries need a browser (or a polyfill)');}
     // Decision: bwf opens a fresh EventSource for each reconnect, so count `open` events across all of them.
     class Watching extends Native {
       constructor(url: string, init?: { withCredentials?: boolean }) {
         super(url, init);
         this.addEventListener('open', () => {
-          if (++opens > 1) for (const cb of [...reconnects]) cb();
+          if (++opens > 1) {
+            // oxlint-disable-next-line unicorn/no-useless-spread -- a callback may unsubscribe while the loop runs, so it walks a copy
+            for (const cb of [...reconnects]) {cb();}
+          }
         });
       }
     }
@@ -88,12 +95,12 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
   const unsubscribing = new Map<string, Promise<void>>();
 
   function release(topic: string, entry: { listeners: Set<() => void>; stop: Promise<() => Promise<void>> }) {
-    if (entry.listeners.size || topics.get(topic) !== entry) return;
+    if (entry.listeners.size || topics.get(topic) !== entry) {return;}
     topics.delete(topic);
     const done = entry.stop.then((stop) => stop()).catch(() => {});
     unsubscribing.set(topic, done);
     void done.then(() => {
-      if (unsubscribing.get(topic) === done) unsubscribing.delete(topic);
+      if (unsubscribing.get(topic) === done) {unsubscribing.delete(topic);}
     });
   }
 
@@ -107,7 +114,8 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
             id: topic,
             topic,
             onEvent: () => {
-              for (const listener of [...listeners]) listener();
+              // oxlint-disable-next-line unicorn/no-useless-spread -- listeners may unsubscribe while being called
+              for (const listener of [...listeners]) {listener();}
             },
           });
         // Decision: a subscribe with a used id replaces it on the server, so wait for the queued unsubscribe of this topic first.
@@ -117,16 +125,16 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
         topics.set(topic, entry);
         const failed = entry;
         stop.catch(() => {
-          if (topics.get(topic) === failed) topics.delete(topic);
+          if (topics.get(topic) === failed) {topics.delete(topic);}
         });
       }
       const listener = () => onEvent();
       entry.listeners.add(listener);
       try {
         await entry.stop;
-      } catch (err) {
+      } catch (error) {
         entry.listeners.delete(listener);
-        throw err;
+        throw error;
       }
       const current = entry;
       return () => {

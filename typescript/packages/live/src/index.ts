@@ -26,11 +26,13 @@ export type QueryState<T> =
   | { status: 'error'; data: T | undefined; error: Error; fetching: boolean };
 
 export type Procs<R> = R extends { readonly '~procedures'?: infer P } ? NonNullable<P> : never;
-export type TopicMap<R> = { [N in keyof Procs<R> & string]?: (input: InputOf<Procs<R>[N]>) => string[] };
+export type TopicMap<R> = { [N in keyof Procs<R> & string]?: (input: InputOf<Procs<R>[N]>) => Array<string> };
 
 export type LiveOptions<R> = {
   /** Same shape as `createClient<R>(...)` from `@builtbyfriends/realtime-http/client`. */
-  client: { call: (name: any, input?: any) => Promise<any> };
+  client: {
+    call<N extends keyof Procs<R> & string>(name: N, input?: InputOf<Procs<R>[N]>): Promise<OutputOf<Procs<R>[N]>>;
+  };
   /** Without a transport, queries load once and refetch only when asked. */
   transport?: LiveTransport;
   /** Default topics per procedure, derived from its input. A query can override them. */
@@ -50,7 +52,7 @@ export type LiveOptions<R> = {
 
 export type QueryOptions = {
   /** Topics for this query, replacing the defaults from `createLive`. */
-  topics?: string[];
+  topics?: Array<string>;
   /** False keeps the query idle (no fetch, no subscription), e.g. while an id is not known. */
   enabled?: boolean;
 };
@@ -70,17 +72,18 @@ export type MutateOptions<R> = {
 };
 
 export interface QueryHandle<T = unknown> {
-  subscribe(listener: () => void): () => void;
-  getSnapshot(): QueryState<T>;
-  refetch(): Promise<void>;
+  subscribe: (listener: () => void) => () => void;
+  getSnapshot: () => QueryState<T>;
+  refetch: () => Promise<void>;
 }
 
 type Entry = {
   key: string;
   name: string;
   input: unknown;
-  topics: string[];
-  state: QueryState<any>;
+  load: () => Promise<{ data: unknown }>;
+  topics: Array<string>;
+  state: QueryState<unknown>;
   subs: Set<Sub>;
   stops: Array<() => void>;
   inFlight: boolean;
@@ -92,22 +95,24 @@ type Entry = {
   waitStart: number | undefined;
   guessed: boolean;
   pending: number;
-  settled: any;
+  settled: unknown;
 };
 
 type Sub = { listener: () => void; enabled: boolean };
 
-const idle: QueryState<any> = { status: 'loading', data: undefined, error: undefined, fetching: false };
+const idle: QueryState<unknown> = { status: 'loading', data: undefined, error: undefined, fetching: false };
 
 function hasEnabled(e: Entry): boolean {
-  for (const s of e.subs) if (s.enabled) return true;
+  for (const s of e.subs) {
+    if (s.enabled) {return true;}
+  }
   return false;
 }
 
 /** Sorted-key JSON, so `{a,b}` and `{b,a}` share one cache entry. */
 export function stableKey(value: unknown): string {
-  return JSON.stringify(value, (_, v) =>
-    v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v,
+  return JSON.stringify(value, (_: string, v: unknown) =>
+    typeof v === 'object' && v !== null && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v,
   );
 }
 
@@ -115,12 +120,11 @@ export function stableKey(value: unknown): string {
  * The framework-free core. One entry per (procedure, input): components that ask for the same
  * query share one fetch and one set of subscriptions. An entry is live while someone listens.
  */
-export function createLive<R extends Typed = Registry<any>>(options: LiveOptions<R>) {
+export function createLive<R extends Typed = Registry>(options: LiveOptions<R>) {
   const entries = new Map<string, Entry>();
   const debounceMs = options.debounceMs ?? 50;
   const cacheMs = options.cacheMs ?? 30_000;
   const maxWaitMs = options.maxWaitMs ?? debounceMs * 4;
-  const topicsFor = options.topics as Record<string, ((input: unknown) => string[]) | undefined> | undefined;
 
   async function fetchNow(e: Entry): Promise<void> {
     if (e.inFlight) {
@@ -128,38 +132,41 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
       return e.running;
     }
     e.inFlight = true;
-    let finish!: () => void;
-    e.running = new Promise<void>((resolve) => (finish = resolve));
+    const finishers: Array<() => void> = [];
+    e.running = new Promise<void>((resolve) => {
+      finishers.push(resolve);
+    });
     const generation = e.generation;
     try {
       do {
         e.dirty = false;
-        if (e.state.status !== 'loading') set(e, { ...e.state, fetching: true } as QueryState<any>);
+        if (e.state.status !== 'loading') {set(e, { ...e.state, fetching: true });}
         try {
-          const data = await options.client.call(e.name, e.input);
-          if (generation !== e.generation) break;
+          const { data } = await e.load();
+          if (generation !== e.generation) {break;}
           e.guessed = false;
           set(e, { status: 'ready', data, error: undefined, fetching: e.dirty });
-        } catch (err) {
-          if (generation !== e.generation) break;
+        } catch (error) {
+          if (generation !== e.generation) {break;}
           const data = e.guessed ? e.settled : e.state.data;
           e.guessed = false;
-          set(e, { status: 'error', data, error: err instanceof Error ? err : new Error(String(err)), fetching: e.dirty });
+          set(e, { status: 'error', data, error: error instanceof Error ? error : new Error(String(error)), fetching: e.dirty });
         }
       } while (e.dirty && generation === e.generation);
     } finally {
-      if (generation === e.generation) e.inFlight = false;
-      finish();
+      if (generation === e.generation) {e.inFlight = false;}
+      for (const finish of finishers) {finish();}
     }
   }
 
-  function set(e: Entry, state: QueryState<any>) {
+  function set(e: Entry, state: QueryState<unknown>) {
     e.state = state;
-    for (const s of [...e.subs]) s.listener();
+    // oxlint-disable-next-line unicorn/no-useless-spread -- a listener may unsubscribe while the loop runs, so it walks a copy
+    for (const s of [...e.subs]) {s.listener();}
   }
 
   function schedule(e: Entry) {
-    if (!hasEnabled(e)) return;
+    if (!hasEnabled(e)) {return;}
     clearTimeout(e.timer);
     const now = Date.now();
     e.waitStart ??= now;
@@ -173,13 +180,13 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
   function collectLater(e: Entry) {
     clearTimeout(e.gc);
     e.gc = setTimeout(() => {
-      if (!e.subs.size && entries.get(e.key) === e) entries.delete(e.key);
+      if (!e.subs.size && entries.get(e.key) === e) {entries.delete(e.key);}
     }, cacheMs);
   }
 
   function start(e: Entry) {
     clearTimeout(e.gc);
-    if (e.stops.length) return;
+    if (e.stops.length) {return;}
     const alive = { current: true };
     const gen = e.generation;
     void fetchNow(e);
@@ -188,7 +195,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
       for (const topic of e.topics) {
         Promise.resolve(transport.subscribe(topic, () => schedule(e))).then(
           (stop) => (alive.current && gen === e.generation ? e.stops.push(stop) : stop()),
-          (err) => console.error(`live: subscribing to "${topic}" failed`, err),
+          (error: unknown) => console.error(`live: subscribing to "${topic}" failed`, error),
         );
       }
       e.stops.push(transport.onReconnect(() => void fetchNow(e)));
@@ -208,11 +215,11 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
   function stop(e: Entry) {
     clearTimeout(e.timer);
     e.waitStart = undefined;
-    for (const s of e.stops.splice(0)) s();
+    for (const s of e.stops.splice(0)) {s();}
     e.generation++;
     if (e.inFlight) {
       e.inFlight = false;
-      if (e.state.fetching) set(e, { ...e.state, fetching: false } as QueryState<any>);
+      if (e.state.fetching) {set(e, { ...e.state, fetching: false });}
     }
   }
 
@@ -222,37 +229,38 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     input: InputOf<Procs<R>[N]>,
     queryOptions: QueryOptions = {},
   ): QueryHandle<OutputOf<Procs<R>[N]>> {
-    const topics = [...new Set(queryOptions.topics ?? topicsFor?.[name]?.(input) ?? [])].sort();
+    const topics = [...new Set(queryOptions.topics ?? options.topics?.[name]?.(input) ?? [])].sort();
     const enabled = queryOptions.enabled !== false;
     const key = `${name}:${stableKey(input)}:${stableKey(topics)}`;
     let e = entries.get(key);
     if (!e) {
-      e = { key, name, input, topics, state: { status: 'loading', data: undefined, error: undefined, fetching: true }, subs: new Set(), stops: [], inFlight: false, running: undefined, dirty: false, timer: undefined, gc: undefined, generation: 0, waitStart: undefined, guessed: false, pending: 0, settled: undefined };
+      e = { key, name, input, load: async () => ({ data: await options.client.call(name, input) }), topics, state: { status: 'loading', data: undefined, error: undefined, fetching: true }, subs: new Set(), stops: [], inFlight: false, running: undefined, dirty: false, timer: undefined, gc: undefined, generation: 0, waitStart: undefined, guessed: false, pending: 0, settled: undefined };
       entries.set(key, e);
       collectLater(e);
     }
     let entry = e;
     function resolve(reinsert: boolean): Entry {
       const current = entries.get(key);
-      if (current) entry = current;
-      else if (reinsert) entries.set(key, entry);
+      if (current) {entry = current;} else if (reinsert) {entries.set(key, entry);}
       return entry;
     }
     return {
       getSnapshot() {
         const current = resolve(false);
-        return !enabled && current.state.status === 'loading' && !current.stops.length && !current.inFlight ? idle : current.state;
+        const state = !enabled && current.state.status === 'loading' && !current.stops.length && !current.inFlight ? idle : current.state;
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the cache is keyed by procedure and input, so the key is what says what type its data has
+        return state as QueryState<OutputOf<Procs<R>[N]>>;
       },
       subscribe(listener) {
         const current = resolve(true);
         const sub: Sub = { listener, enabled };
         current.subs.add(sub);
         clearTimeout(current.gc);
-        if (enabled) start(current);
+        if (enabled) {start(current);}
         return () => {
-          if (!current.subs.delete(sub)) return;
-          if (current.stops.length && !hasEnabled(current)) stop(current);
-          if (!current.subs.size) collectLater(current);
+          if (!current.subs.delete(sub)) {return;}
+          if (current.stops.length && !hasEnabled(current)) {stop(current);}
+          if (!current.subs.size) {collectLater(current);}
         };
       },
       refetch: () => fetchNow(resolve(false)),
@@ -273,20 +281,23 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     mutateOptions: MutateOptions<R> = {},
   ): Promise<OutputOf<Procs<R>[N]>> {
     let done = false;
-    const changed: Array<{ e: Entry; before: QueryState<any>; guess: QueryState<any>; fn: (data: any) => any }> = [];
+    // oxlint-disable-next-line quality/no-unknown-returns -- the cache holds data of many procedures, so the replay of an optimistic change can't name one type
+    const changed: Array<{ e: Entry; before: QueryState<unknown>; guess: QueryState<unknown>; fn: (data: unknown) => unknown }> = [];
     try {
       mutateOptions.optimistic?.({
         update(queryName, queryInput, fn) {
           const prefix = `${queryName}:${stableKey(queryInput)}:`;
           for (const e of entries.values()) {
-            if (!e.key.startsWith(prefix) || e.state.data === undefined) continue;
+            if (!e.key.startsWith(prefix) || e.state.data === undefined) {continue;}
             const before = e.state;
-            const guess = { ...before, data: fn(before.data) } as QueryState<any>;
-            if (!e.guessed) e.settled = before.data;
+            // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the key matched this procedure and input, so the cached data has the type the store gives `fn`
+            const apply = (data: unknown) => fn(data as OutputOf<Procs<R>[typeof queryName]>);
+            const guess = { ...before, data: apply(before.data) } as QueryState<unknown>;
+            if (!e.guessed) {e.settled = before.data;}
             e.guessed = true;
             e.pending++;
             set(e, guess);
-            changed.push({ e, before, guess, fn });
+            changed.push({ e, before, guess, fn: apply });
           }
         },
       });
@@ -296,29 +307,38 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
         const prev = e.settled;
         try {
           e.settled = fn(prev);
-        } catch {}
-        if (!e.pending) e.guessed = false;
-        if (e.state.status === 'error' && e.state.data === prev && e.settled !== prev) set(e, { ...e.state, data: e.settled });
+        } catch {
+          // Decision: if replaying the change on the settled data throws, the settled data stays as it was.
+        }
+        if (!e.pending) {e.guessed = false;}
+        if (e.state.status === 'error' && e.state.data === prev && e.settled !== prev) {set(e, { ...e.state, data: e.settled });}
       }
       done = true;
       return result;
-    } catch (err) {
+    } catch (error) {
       if (!done) {
         for (const { e, before, guess } of changed.reverse()) {
           e.pending--;
-          if (e.state.data === guess.data) set(e, { ...e.state, data: before.data } as QueryState<any>);
-          if (!e.pending) e.guessed = false;
+          // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the spread keeps the status and swaps the data for what the entry showed before
+          if (e.state.data === guess.data) {set(e, { ...e.state, data: before.data } as QueryState<unknown>);}
+          if (!e.pending) {e.guessed = false;}
         }
       }
-      throw err;
+      throw error;
     } finally {
-      for (const { e } of changed) if (hasEnabled(e)) void fetchNow(e);
+      for (const { e } of changed) {
+        if (hasEnabled(e)) {void fetchNow(e);}
+      }
     }
   }
 
   /** Refetch every query that is currently being watched. */
-  function refetchAll(): Promise<void[]> {
-    return Promise.all([...entries.values()].filter(hasEnabled).map((e) => fetchNow(e)));
+  function refetchAll(): Promise<Array<void>> {
+    const watched: Array<Entry> = [];
+    for (const e of entries.values()) {
+      if (hasEnabled(e)) {watched.push(e);}
+    }
+    return Promise.all(watched.map((e) => fetchNow(e)));
   }
 
   /**
@@ -331,22 +351,30 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     fn: (data: OutputOf<Procs<R>[N]>, input: InputOf<Procs<R>[N]>) => OutputOf<Procs<R>[N]> | undefined,
   ): void {
     for (const e of entries.values()) {
-      if (e.name !== name || e.state.status !== 'ready') continue;
-      const next = fn(e.state.data, e.input as InputOf<Procs<R>[N]>);
-      if (next === undefined || next === e.state.data) continue;
+      if (e.name !== name || e.state.status !== 'ready') {continue;}
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- entries of this procedure name hold the types the registry gives it
+      const next = fn(e.state.data as OutputOf<Procs<R>[N]>, e.input as InputOf<Procs<R>[N]>);
+      if (next === undefined || next === e.state.data) {continue;}
       // Decision: a fetch on its way may have read before this change, so fetch once more after it and it can't win.
-      if (e.inFlight) e.dirty = true;
-      if (e.guessed && e.settled !== undefined) e.settled = fn(e.settled, e.input as InputOf<Procs<R>[N]>) ?? e.settled;
+      if (e.inFlight) {e.dirty = true;}
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- entries of this procedure name hold the input type the registry gives it
+      if (e.guessed && e.settled !== undefined) {e.settled = fn(e.settled as OutputOf<Procs<R>[N]>, e.input as InputOf<Procs<R>[N]>) ?? e.settled;}
       set(e, { ...e.state, data: next });
     }
   }
 
   /** Refetches the watched answers of a procedure whose input passes `match`. */
-  function refetch<N extends keyof Procs<R> & string>(name: N, match: (input: InputOf<Procs<R>[N]>) => boolean = () => true): Promise<void[]> {
-    return Promise.all([...entries.values()].filter((e) => e.name === name && hasEnabled(e) && match(e.input as InputOf<Procs<R>[N]>)).map((e) => fetchNow(e)));
+  function refetch<N extends keyof Procs<R> & string>(name: N, match: (input: InputOf<Procs<R>[N]>) => boolean = () => true): Promise<Array<void>> {
+    const matching: Array<Entry> = [];
+    for (const e of entries.values()) {
+      if (e.name !== name || !hasEnabled(e)) {continue;}
+      // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- entries of this procedure name hold the input type the registry gives it
+      if (match(e.input as InputOf<Procs<R>[N]>)) {matching.push(e);}
+    }
+    return Promise.all(matching.map((e) => fetchNow(e)));
   }
 
   return { query, mutate, refetchAll, update, refetch };
 }
 
-export type Live<R extends Typed = Registry<any>> = ReturnType<typeof createLive<R>>;
+export type Live<R extends Typed = Registry> = ReturnType<typeof createLive<R>>;

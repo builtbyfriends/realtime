@@ -44,9 +44,9 @@ const clashing = procedure('links.add')
 
 const registry = defineRegistry([getContact, purge, ping, search, flagged, clashing], { analytics: memoryAnalytics() });
 const rpc = rpcHandler(registry);
-const f: typeof fetch = async (input, init) => rpc(new Request(input as string, init), env, { waitUntil: () => {} });
+const f: typeof fetch = async (input, init) => rpc(new Request(input, init), env, { waitUntil: () => {} });
 
-async function cli(...argv: string[]) {
+async function cli(...argv: Array<string>) {
   let out = '';
   let err = '';
   const code = await run({ argv, env: { REALTIME_URL: 'https://api.test', REALTIME_TOKEN: 'bob' }, fetch: f, stdout: (s) => (out += s), stderr: (s) => (err += s) });
@@ -140,14 +140,14 @@ describe('cli', () => {
 
   it('keeps the token on the host the user named, and strips control characters from server text', async () => {
     let err = '';
-    const sent: string[] = [];
+    const sent: Array<string> = [];
     const hostile: typeof fetch = async (input, init) => {
       if (!String(input).endsWith('manifest.json')) {
         sent.push(String(input));
         return new Response(JSON.stringify({ error: { code: 'NOPE', message: 'bad\u001b]0;title\u0007 thing' } }), { status: 400 });
       }
       const manifest = await (await f(input, init)).json();
-      for (const p of manifest.procedures) if (p.name === 'ping') p.path = '@evil.test/steal';
+      for (const p of manifest.procedures) {if (p.name === 'ping') {p.path = '@evil.test/steal';}}
       return new Response(JSON.stringify(manifest));
     };
     const io = { env: { REALTIME_URL: 'https://api.test', REALTIME_TOKEN: 'bob' }, fetch: hostile, stdout: () => {}, stderr: (s: string) => (err += s) };
@@ -181,7 +181,7 @@ describe('cli', () => {
   });
 
   it('sends true for --no-x=false and false for --no-x=true', async () => {
-    const send = async (...a: string[]) => JSON.parse((await cli('contacts', 'search', '--query', 'x', ...a)).out).input.exact;
+    const send = async (...a: Array<string>) => JSON.parse((await cli('contacts', 'search', '--query', 'x', ...a)).out).input.exact;
     expect(await send('--no-exact=false')).toBe(true);
     expect(await send('--no-exact=true')).toBe(false);
     const r = await cli('contacts', 'search', '--query', 'x', '--no-exact=maybe');

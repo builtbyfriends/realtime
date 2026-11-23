@@ -9,27 +9,30 @@ export function bearerAuth<Ctx, Env = unknown>(opts: {
   verify: (token: string, env: Env) => Promise<Ctx | null | undefined> | Ctx | null | undefined;
   actorId?: (ctx: Ctx) => string | undefined;
 }): AuthProvider<Ctx, Env> {
-  return {
+  const provider: AuthProvider<Ctx, Env> = {
     name: opts.name ?? 'bearer',
     resolve(request, env) {
       const header = request.headers.get('authorization') ?? '';
-      const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-      return match ? opts.verify(match[1]!.trim(), env) : null;
+      const token = /^Bearer\s+(.+)$/i.exec(header.trim())?.[1];
+      return token === undefined ? null : opts.verify(token.trim(), env);
     },
-    ...(opts.actorId ? { actorId: opts.actorId } : {}),
   };
+  if (opts.actorId) {
+    provider.actorId = opts.actorId;
+  }
+  return provider;
 }
 
 /** Tries each provider in order and uses the first that resolves a caller. That provider also names the actor. */
-export function anyOf<Ctx, Env = unknown>(name: string, ...providers: AuthProvider<Ctx, Env>[]): AuthProvider<Ctx, Env> {
+export function anyOf<Ctx, Env = unknown>(name: string, ...providers: Array<AuthProvider<Ctx, Env>>): AuthProvider<Ctx, Env> {
   const resolvedBy = new WeakMap<object, AuthProvider<Ctx, Env>>();
   return {
     name,
     async resolve(request, env) {
       for (const p of providers) {
         const ctx = await p.resolve(request, env);
-        if (ctx != null) {
-          if (typeof ctx === 'object') resolvedBy.set(ctx, p);
+        if (ctx !== null && ctx !== undefined) {
+          if (typeof ctx === 'object') {resolvedBy.set(ctx, p);}
           return ctx;
         }
       }
@@ -37,10 +40,10 @@ export function anyOf<Ctx, Env = unknown>(name: string, ...providers: AuthProvid
     },
     actorId: (ctx) => {
       const owner = typeof ctx === 'object' && ctx !== null ? resolvedBy.get(ctx) : undefined;
-      if (owner) return owner.actorId?.(ctx);
+      if (owner) {return owner.actorId?.(ctx);}
       for (const p of providers) {
         const id = p.actorId?.(ctx);
-        if (id) return id;
+        if (id) {return id;}
       }
       return undefined;
     },

@@ -1,7 +1,9 @@
-import { bearerAuth, createProcedures, type Registry } from '@builtbyfriends/realtime';
+import { bearerAuth, createProcedures } from '@builtbyfriends/realtime';
+import type { Registry } from '@builtbyfriends/realtime';
 
 declare global {
   // Decision: empty here. bwf fills it in from bwf.config.ts and your imports (.bwf/bindings.d.ts).
+  // oxlint-disable-next-line typescript/no-empty-object-type -- apps and the generated bindings add members by declaration merging
   interface BwfGeneratedEnvBindings {}
 }
 
@@ -38,7 +40,7 @@ export function setAppRegistry(registry: Registry) {
  * anthropicTools() and runTool() from @builtbyfriends/realtime-ai.
  */
 export function appRegistry(): Registry {
-  if (!current) throw new Error('appRegistry() is only available inside a request, after the realtime middleware has loaded');
+  if (!current) {throw new Error('appRegistry() is only available inside a request, after the realtime middleware has loaded');}
   return current;
 }
 
@@ -59,11 +61,11 @@ export function approveAiRuns(decide: (call: AiRunCall) => boolean | Promise<boo
 
 /** @internal The realtime middleware asks this for each held call. A decision that throws counts as no. */
 export async function aiRunApproved(call: AiRunCall): Promise<boolean> {
-  if (!approval) return false;
+  if (!approval) {return false;}
   try {
     return (await approval(call)) === true;
-  } catch (e) {
-    console.error('approveAiRuns failed', e);
+  } catch (error) {
+    console.error('approveAiRuns failed', error);
     return false;
   }
 }

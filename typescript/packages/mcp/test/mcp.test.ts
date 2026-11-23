@@ -15,7 +15,7 @@ async function connect(token?: string) {
   const transport = new StreamableHTTPClientTransport(new URL('http://localhost/mcp'), {
     fetch: async (input, init) => {
       // Decision: Node's fetch adds Host on the wire and workerd always has it, so add it for in-process calls.
-      const request = new Request(input as string, init);
+      const request = new Request(input, init);
       request.headers.set('host', 'localhost');
       return mcp(request, env, ctx);
     },
@@ -33,7 +33,7 @@ describe('mcp', () => {
       ['contacts_get', true, false],
       ['cache_purge', false, true],
     ]);
-    expect(tools[0]!.inputSchema).toMatchObject({ type: 'object', required: ['orgId', 'id'] });
+    expect(tools[0].inputSchema).toMatchObject({ type: 'object', required: ['orgId', 'id'] });
     await client.close();
   });
 

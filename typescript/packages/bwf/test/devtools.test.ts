@@ -6,7 +6,7 @@ vi.mock('virtual:realtime/devtools-page', () => ({ default: '' }));
 const registry = { trace: { subscribe: () => () => {} }, audit: () => [], procedures: new Map() } as any;
 const app = { name: 'test', basePath: '/rpc', mcpRoute: '/mcp' };
 
-async function recorded(headers: Record<string, string>, resHeaders: [string, string][] = []) {
+async function recorded(headers: Record<string, string>, resHeaders: Array<[string, string]> = []) {
   const devtools = createDevtools(registry, app);
   const res = new Response('{}', { headers: resHeaders });
   await devtools.record(new Request('https://app.test/rpc/x', { headers }), () => {}, async () => res);

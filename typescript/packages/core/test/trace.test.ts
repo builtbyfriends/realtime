@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { defineRegistry, type CallTrace, type TraceEvent } from '@builtbyfriends/realtime';
+import { defineRegistry } from '@builtbyfriends/realtime';
+import type { CallTrace, TraceEvent } from '@builtbyfriends/realtime';
 import { memoryAnalytics } from '@builtbyfriends/realtime-analytics';
 import { env, getContact, ping, purge, req } from './fixtures.js';
 
 function setup() {
   const registry = defineRegistry([getContact, purge, ping], { analytics: memoryAnalytics(), onError: () => {} });
-  const events: TraceEvent[] = [];
+  const events: Array<TraceEvent> = [];
   const call = (name: string, input: unknown, token?: string, surface: 'http' | 'mcp' = 'http') =>
-    registry.call(name, input, { request: req(token), env, surface }).then(() => events[events.length - 1] as CallTrace);
+    registry.call(name, input, { request: req(token), env, surface }).then(() => events.at(-1) as CallTrace);
   return { registry, events, call };
 }
 const statuses = (t: CallTrace) => Object.fromEntries(t.steps.map((s) => [s.concern, s.status]));

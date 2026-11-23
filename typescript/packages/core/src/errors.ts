@@ -26,10 +26,14 @@ export type Failure = {
   status: number;
   code: string;
   message: string;
-  issues?: { message: string; path: string }[];
+  issues?: Array<{ message: string; path: string }>;
 };
 
 export function builtinFailure(code: BuiltinErrorCode, issues?: Failure['issues']): Failure {
   const spec = BUILTIN_ERRORS[code];
-  return { ok: false, status: spec.status, code, message: spec.message, ...(issues ? { issues } : {}) };
+  const failure: Failure = { ok: false, status: spec.status, code, message: spec.message };
+  if (issues) {
+    failure.issues = issues;
+  }
+  return failure;
 }

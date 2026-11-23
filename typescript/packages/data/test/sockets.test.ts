@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { defineData, defineSchema, SyncSockets, table } from '../src/index.js';
 import { socketIdentity } from '../src/deployment.js';
+import type { SocketIdentity } from '../src/index.js';
 import { memoryStorage } from './storage.js';
 
 const schema = defineSchema({
@@ -11,10 +12,10 @@ function setup() {
   const data = defineData({ schema, functions: ({ mutation }) => ({ add: mutation((ctx, a: { room: string; text: string }) => ctx.db.insert('notes', a)) }) });
   const engine = data.engine(memoryStorage());
   engine.init();
-  const all: { tags: string[]; ws: ReturnType<typeof fakeSocket> }[] = [];
+  const all: Array<{ tags: Array<string>; ws: ReturnType<typeof fakeSocket> }> = [];
   const state = {
-    acceptWebSocket: (ws: any, tags: string[] = []) => void all.push({ ws, tags }),
-    getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
+    acceptWebSocket: (ws: any, tags: Array<string> = []) => void all.push({ ws, tags }),
+    getWebSockets: (tag?: string) => all.flatMap((s) => (!tag || s.tags.includes(tag) ? [s.ws] : [])),
   };
   const sockets = new SyncSockets(state, (g, a, l) => engine.pull(g, a, l));
   engine.listen((batch) => sockets.broadcast(batch));
@@ -23,10 +24,10 @@ function setup() {
 }
 
 function fakeSocket() {
-  let attachment: unknown = null;
-  const sent: any[] = [];
-  const closed: number[] = [];
-  return { sent, closed, close: (code = 1000) => void closed.push(code), send: (m: string) => void sent.push(JSON.parse(m)), serializeAttachment: (v: unknown) => void (attachment = v), deserializeAttachment: () => attachment };
+  let attachment: SocketIdentity | null = null;
+  const sent: Array<any> = [];
+  const closed: Array<number> = [];
+  return { sent, closed, close: (code = 1000) => void closed.push(code), send: (m: string) => void sent.push(JSON.parse(m)), serializeAttachment: (v: SocketIdentity) => void (attachment = v), deserializeAttachment: () => attachment };
 }
 
 describe('sync sockets', () => {
@@ -58,7 +59,7 @@ describe('sync sockets', () => {
 });
 
 describe('watching groups', () => {
-  type Note = { room: string; text: string; likes: string[] };
+  type Note = { room: string; text: string; likes: Array<string> };
   const schema = defineSchema({
     notes: table<Note>({
       sync: { group: (n) => `room:${n.room}`, view: (n, { actor }) => (n.room === 'secret' ? null : { text: n.text, mine: n.likes.includes(actor) }) },
@@ -74,7 +75,7 @@ describe('watching groups', () => {
         join: mutation((ctx, a: { room: string; user: string }) => void ctx.db.insert('members', a)),
         leave: mutation((ctx, a: { room: string; user: string }) => {
           const row = ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', a.user).eq('room', a.room)).first();
-          if (row) ctx.db.delete('members', row._id);
+          if (row) {ctx.db.delete('members', row._id);}
         }),
       }),
       syncAccess: (ctx, actor, group) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', group.slice(5))).first(),
@@ -82,10 +83,10 @@ describe('watching groups', () => {
     });
     const engine = data.engine(memoryStorage());
     engine.init();
-    const all: { tags: string[]; ws: ReturnType<typeof fakeSocket> }[] = [];
+    const all: Array<{ tags: Array<string>; ws: ReturnType<typeof fakeSocket> }> = [];
     const state = {
-      acceptWebSocket: (ws: any, tags: string[] = []) => void all.push({ ws, tags }),
-      getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
+      acceptWebSocket: (ws: any, tags: Array<string> = []) => void all.push({ ws, tags }),
+      getWebSockets: (tag?: string) => all.flatMap((s) => (!tag || s.tags.includes(tag) ? [s.ws] : [])),
     };
     const sockets = new SyncSockets(state, { pull: (_a, g, after, l) => engine.pull(g, after, l), view: (a, c) => engine.view(a, c), access: (a, g) => engine.access(a, g) });
     engine.listen((batch) => sockets.broadcast(batch));
@@ -143,18 +144,18 @@ describe('live topics over the socket', () => {
         join: mutation((ctx, a: { room: string; user: string }) => void ctx.db.insert('members', a)),
         leave: mutation((ctx, a: { room: string; user: string }) => {
           const row = ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', a.user).eq('room', a.room)).first();
-          if (row) ctx.db.delete('members', row._id);
+          if (row) {ctx.db.delete('members', row._id);}
         }),
       }),
-      syncTopics: (ctx, actor, topic) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', topic.split(':')[2]!)).first(),
+      syncTopics: (ctx, actor, topic) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', topic.split(':')[2])).first(),
       syncRecheck: (topics) => topics.includes('members'),
     });
     const engine = data.engine(memoryStorage());
     engine.init();
-    const all: { tags: string[]; ws: ReturnType<typeof fakeSocket> }[] = [];
+    const all: Array<{ tags: Array<string>; ws: ReturnType<typeof fakeSocket> }> = [];
     const state = {
-      acceptWebSocket: (ws: any, tags: string[] = []) => void all.push({ ws, tags }),
-      getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
+      acceptWebSocket: (ws: any, tags: Array<string> = []) => void all.push({ ws, tags }),
+      getWebSockets: (tag?: string) => all.flatMap((s) => (!tag || s.tags.includes(tag) ? [s.ws] : [])),
     };
     const sockets = new SyncSockets(state, {
       pull: (_a, g, after, l) => engine.pull(g, after, l),
@@ -206,18 +207,18 @@ describe('live queries over the socket', () => {
         join: mutation((ctx, a: { room: string; user: string }) => void ctx.db.insert('members', a)),
         leave: mutation((ctx, a: { room: string; user: string }) => {
           const row = ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', a.user).eq('room', a.room)).first();
-          if (row) ctx.db.delete('members', row._id);
+          if (row) {ctx.db.delete('members', row._id);}
         }),
         listPins: query((ctx, a: { room: string; userId: string }) => ctx.db.query('pins').withIndex('by_room', (q) => q.eq('room', a.room)).collect()),
       }),
-      syncTopics: (ctx, actor, topic) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', topic.split(':')[2]!)).first(),
+      syncTopics: (ctx, actor, topic) => !!ctx.db.query('members').withIndex('by_user', (q) => q.eq('user', actor).eq('room', topic.split(':')[2])).first(),
       syncRecheck: (topics) => topics.includes('members'),
       syncQuery: (actor, name, input) => (name === 'pins.list' ? { fn: 'listPins', args: { ...(input as object), userId: actor }, output } : null),
     });
     const engine = data.engine(memoryStorage());
     engine.init();
-    const runs: string[] = [];
-    const all: ReturnType<typeof fakeSocket>[] = [];
+    const runs: Array<string> = [];
+    const all: Array<ReturnType<typeof fakeSocket>> = [];
     const sockets = new SyncSockets(
       { acceptWebSocket: (ws: any) => void all.push(ws), getWebSockets: () => all },
       { pull: (_a, g, after, l) => engine.pull(g, after, l), topicAccess: (a, t) => engine.topicAccess(a, t), query: (a, n, i) => (runs.push(a), engine.liveQuery(a, n, i)) },
@@ -272,7 +273,7 @@ describe('live queries over the socket', () => {
     await m('pin', { room: 'x', text: 'one' });
     await tick();
     expect(runs).toEqual(['ann', 'bo']);
-    for (const ws of mine) expect(ws.sent.at(-1)).toEqual({ type: 'result', id: 'q', value: [{ text: 'one' }] });
+    for (const ws of mine) {expect(ws.sent.at(-1)).toEqual({ type: 'result', id: 'q', value: [{ text: 'one' }] });}
   });
 
   it('refuses a query with no name before the app is asked', async () => {
@@ -290,7 +291,7 @@ describe('live queries over the socket', () => {
     await m('join', { room: 'x', user: 'ann' });
     const a = fakeSocket();
     sockets.accept(a, { actor: 'ann', groups: [] });
-    const ask = (topics: string[]) => sockets.message(a, JSON.stringify({ type: 'query', id: 7, name: 'pins.list', input: { room: 'x' }, topics }));
+    const ask = (topics: Array<string>) => sockets.message(a, JSON.stringify({ type: 'query', id: 7, name: 'pins.list', input: { room: 'x' }, topics }));
     ask(['pins:room:x']);
     await tick();
     ask(['pins:room:x']);
@@ -339,7 +340,7 @@ describe('sockets that go wrong', () => {
       sync: {
         group: (n) => `room:${n.room}`,
         view: (n, { actor }) => {
-          if (actor === 'bad' && n.text === 'boom') throw new Error('view failed');
+          if (actor === 'bad' && n.text === 'boom') {throw new Error('view failed');}
           return { text: n.text };
         },
       },
@@ -351,13 +352,13 @@ describe('sockets that go wrong', () => {
     const storage = memoryStorage();
     const engine = data.engine(storage);
     engine.init();
-    const all: { tags: string[]; ws: ReturnType<typeof fakeSocket> }[] = [];
+    const all: Array<{ tags: Array<string>; ws: ReturnType<typeof fakeSocket> }> = [];
     const state = {
-      acceptWebSocket: (ws: any, tags: string[] = []) => void all.push({ ws, tags }),
-      getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
+      acceptWebSocket: (ws: any, tags: Array<string> = []) => void all.push({ ws, tags }),
+      getWebSockets: (tag?: string) => all.flatMap((s) => (!tag || s.tags.includes(tag) ? [s.ws] : [])),
     };
     const view = (a: string, c: Parameters<typeof engine.view>[1]) => {
-      if (a === 'broken') throw new Error('hook failed');
+      if (a === 'broken') {throw new Error('hook failed');}
       return engine.view(a, c);
     };
     const sockets = new SyncSockets(state, { pull: (_a, g, after, l) => engine.pull(g, after, l), view, access: (a, g) => engine.access(a, g) });
@@ -416,8 +417,13 @@ describe('sockets that go wrong', () => {
 
   it('refuses a header that does not name an actor and its groups', async () => {
     const data = defineData({ schema, functions: () => ({}) });
-    class Base {}
-    const Obj = data.durableObject(Base as never) as unknown as new (ctx: unknown, env: unknown) => { fetch(r: Request): Response | Promise<Response> };
+    class Base {
+      constructor(
+        readonly ctx: unknown,
+        readonly env: unknown,
+      ) {}
+    }
+    const Obj = data.durableObject(Base);
     const ctx = { storage: memoryStorage(), blockConcurrencyWhile: async (fn: () => Promise<void>) => fn(), acceptWebSocket: () => {}, getWebSockets: () => [] };
     const object = new Obj(ctx, {});
     for (const header of ['not json', '{"actor":7,"groups":[]}', '{"actor":"ann","groups":"team:1"}', 'null']) {
@@ -428,10 +434,10 @@ describe('sockets that go wrong', () => {
 
   it('answers a pull whatever limit the device sends', async () => {
     const { sockets, add } = setup();
-    for (let i = 0; i < 3; i++) await add('x', `n${i}`);
+    for (let i = 0; i < 3; i++) {await add('x', `n${i}`);}
     const a = fakeSocket();
     sockets.accept(a, { actor: 'ann', groups: ['room:x'] });
-    for (const limit of [-1, 0, 'many', 1e12, null, 2.5]) sockets.message(a, JSON.stringify({ type: 'pull', after: 0, id: 1, limit }));
+    for (const limit of [-1, 0, 'many', 1e12, null, 2.5]) {sockets.message(a, JSON.stringify({ type: 'pull', after: 0, id: 1, limit }));}
     expect(a.closed).toEqual([]);
     expect(a.sent.map((m) => m.changes.length)).toEqual([3, 3, 3, 3, 3, 2]);
     expect(a.sent[5]).toMatchObject({ seq: 2, more: true });
@@ -453,7 +459,7 @@ describe('sockets that go wrong', () => {
   it('splits a pull that would not fit in one message', async () => {
     const { sockets, add } = setup();
     const big = 'x'.repeat(400_000);
-    for (let i = 0; i < 4; i++) await add('x', big);
+    for (let i = 0; i < 4; i++) {await add('x', big);}
     const a = fakeSocket();
     sockets.accept(a, { actor: 'ann', groups: ['room:x'] });
     sockets.message(a, JSON.stringify({ type: 'pull', after: 0, id: 1 }));
@@ -468,7 +474,7 @@ describe('sockets that go wrong', () => {
     const { sockets } = setup();
     const a = fakeSocket();
     sockets.accept(a, { actor: 'ann', groups: [] });
-    for (const raw of ['null', '5', '"pull"', '[]', '{"type":7}']) expect(sockets.message(a, raw)).toBe(false);
+    for (const raw of ['null', '5', '"pull"', '[]', '{"type":7}']) {expect(sockets.message(a, raw)).toBe(false);}
   });
 
   it('closes a socket whose new groups do not fit, instead of stopping at it', () => {
@@ -505,7 +511,7 @@ describe('sockets that go wrong', () => {
     };
     const engine = data.engine(storage);
     engine.init();
-    const seen: number[] = [];
+    const seen: Array<number> = [];
     engine.listen((batch) => void seen.push(batch.seq));
     await expect(engine.run('mutation', 'add', { room: 'x', text: 'hi' })).rejects.toThrow('no alarm');
     expect(seen).toEqual([1]);

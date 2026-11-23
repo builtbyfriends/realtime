@@ -2,7 +2,8 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { createElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createLive, type LiveTransport } from '../src/index.js';
+import { createLive } from '../src/index.js';
+import type { LiveTransport } from '../src/index.js';
 import { createLiveHooks } from '../src/react.js';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -67,7 +68,7 @@ describe('react hooks', () => {
 
   it('useMutation tracks pending and error', async () => {
     const call = vi.fn(async (name: string) => {
-      if (name === 'bad') throw new Error('nope');
+      if (name === 'bad') {throw new Error('nope');}
       return 'ok';
     });
     const live = createLive<any>({ client: { call } });

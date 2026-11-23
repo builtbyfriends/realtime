@@ -1,4 +1,4 @@
-import type { CallResult, Registry, Surface } from '@builtbyfriends/realtime';
+import type { CallResult, JsonSchema, Registry, Surface } from '@builtbyfriends/realtime';
 import { BUILTIN_ERRORS } from '@builtbyfriends/realtime';
 
 export type RpcHandlerOptions = {
@@ -22,16 +22,18 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 
 /** Turns a call result into the wire format: `{ data }` on success, `{ error: { code, message, issues? } }` otherwise. */
 export function toResponse(result: CallResult): Response {
-  if (result.ok) return json({ data: result.value ?? null });
+  if (result.ok) {return json({ data: result.value ?? null });}
   const { code, message, issues, status } = result;
-  return json({ error: { code, message, ...(issues ? { issues } : {}) } }, status, status === 401 ? { 'www-authenticate': 'Bearer' } : {});
+  const error: ErrorPayload = { code, message };
+  if (issues) {error.issues = issues;}
+  return json({ error }, status, status === 401 ? { 'www-authenticate': 'Bearer' } : {});
 }
 
 /**
  * Fetch handler for the registry: every procedure is `POST {basePath}/{name}` with a JSON body.
  * CLI calls send `x-realtime-surface: cli` so analytics can tell them apart.
  */
-export function rpcHandler(registry: Registry<any>, options: RpcHandlerOptions = {}): RpcHandler {
+export function rpcHandler(registry: Registry, options: RpcHandlerOptions = {}): RpcHandler {
   const base = (options.basePath ?? '/rpc').replace(/\/$/, '');
   const manifest = options.manifest === false ? null : JSON.stringify(registry.manifest(base));
   const openapi = options.openapi === false ? null : JSON.stringify(openApi(registry, base, options.openapi ?? { title: 'API', version: '0.0.0' }));
@@ -43,13 +45,13 @@ export function rpcHandler(registry: Registry<any>, options: RpcHandlerOptions =
 
   const handler = async (request: Request, env: unknown, ctx: ExecutionContextLike) => {
     const path = new URL(request.url).pathname;
-    if (!matches(request)) return toResponse({ ok: false, status: 404, code: 'NOT_FOUND_PROCEDURE', message: BUILTIN_ERRORS.NOT_FOUND_PROCEDURE.message });
+    if (!matches(request)) {return toResponse({ ok: false, status: 404, code: 'NOT_FOUND_PROCEDURE', message: BUILTIN_ERRORS.NOT_FOUND_PROCEDURE.message });}
     const rest = path.slice(base.length + 1);
 
-    if (request.method === 'GET' && rest === 'manifest.json' && manifest) return new Response(manifest, { headers: { 'content-type': 'application/json' } });
-    if (request.method === 'GET' && rest === 'openapi.json' && openapi) return new Response(openapi, { headers: { 'content-type': 'application/json' } });
-    if (!registry.procedures.has(rest)) return toResponse({ ok: false, status: 404, code: 'NOT_FOUND_PROCEDURE', message: BUILTIN_ERRORS.NOT_FOUND_PROCEDURE.message });
-    if (request.method !== 'POST') return json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Use POST' } }, 405, { allow: 'POST' });
+    if (request.method === 'GET' && rest === 'manifest.json' && manifest) {return new Response(manifest, { headers: { 'content-type': 'application/json' } });}
+    if (request.method === 'GET' && rest === 'openapi.json' && openapi) {return new Response(openapi, { headers: { 'content-type': 'application/json' } });}
+    if (!registry.procedures.has(rest)) {return toResponse({ ok: false, status: 404, code: 'NOT_FOUND_PROCEDURE', message: BUILTIN_ERRORS.NOT_FOUND_PROCEDURE.message });}
+    if (request.method !== 'POST') {return json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Use POST' } }, 405, { allow: 'POST' });}
 
     let input: unknown = undefined;
     const text = await request.text();
@@ -67,8 +69,19 @@ export function rpcHandler(registry: Registry<any>, options: RpcHandlerOptions =
   return Object.assign(handler, { matches });
 }
 
+type ErrorPayload = { code: string; message: string; issues?: Extract<CallResult, { ok: false }>['issues'] };
+type OpenApiResponse = { description: string; content: { 'application/json': { schema: JsonSchema } } };
+type OpenApiOperation = {
+  operationId: string;
+  summary?: string;
+  security: Array<{ bearer: Array<string> }>;
+  requestBody?: { required: boolean; content: { 'application/json': { schema: JsonSchema } } };
+  responses: Record<string, OpenApiResponse>;
+};
+type OpenApiPathItem = { post: OpenApiOperation };
+
 /** OpenAPI 3.1 for every procedure, generated from the same JSON Schema the registry checked at load. */
-export function openApi(registry: Registry<any>, basePath = '/rpc', info = { title: 'API', version: '0.0.0' }) {
+export function openApi(registry: Registry, basePath = '/rpc', info = { title: 'API', version: '0.0.0' }) {
   const errorBody = {
     type: 'object',
     properties: {
@@ -80,37 +93,36 @@ export function openApi(registry: Registry<any>, basePath = '/rpc', info = { tit
     },
     required: ['error'],
   };
-  const paths: Record<string, unknown> = {};
+  const paths: Record<string, OpenApiPathItem> = {};
   for (const p of registry.procedures.values()) {
     const d = p.decisions;
-    const responses: Record<string, unknown> = {
-      '200': {
-        description: 'OK',
-        content: { 'application/json': { schema: { type: 'object', properties: { data: p.jsonSchema.output ?? {} }, required: ['data'] } } },
-      },
-      '400': { description: 'INVALID_INPUT', content: { 'application/json': { schema: errorBody } } },
-      '500': { description: 'INTERNAL', content: { 'application/json': { schema: errorBody } } },
-    };
-    if (d.authn.kind === 'auth') responses['401'] = { description: 'UNAUTHENTICATED', content: { 'application/json': { schema: errorBody } } };
-    if (d.authz.kind === 'policy') responses['403'] = { description: 'FORBIDDEN', content: { 'application/json': { schema: errorBody } } };
+    const errorResponse = (description: string): OpenApiResponse => ({ description, content: { 'application/json': { schema: errorBody } } });
+    const responses = new Map<string, OpenApiResponse>([
+      [
+        '200',
+        {
+          description: 'OK',
+          content: { 'application/json': { schema: { type: 'object', properties: { data: p.jsonSchema.output ?? {} }, required: ['data'] } } },
+        },
+      ],
+      ['400', errorResponse('INVALID_INPUT')],
+      ['500', errorResponse('INTERNAL')],
+    ]);
+    if (d.authn.kind === 'auth') {responses.set('401', errorResponse('UNAUTHENTICATED'));}
+    if (d.authz.kind === 'policy') {responses.set('403', errorResponse('FORBIDDEN'));}
     for (const [code, spec] of Object.entries(p.errors)) {
       const key = String(spec.status);
-      const prev = responses[key] as { description: string } | undefined;
-      responses[key] = { description: prev ? `${prev.description}, ${code}` : code, content: { 'application/json': { schema: errorBody } } };
+      const prev = responses.get(key);
+      responses.set(key, errorResponse(prev ? `${prev.description}, ${code}` : code));
     }
     const description =
       (d.mcp.kind === 'tool' && d.mcp.description) || (d.cli.kind === 'command' && d.cli.description) || (d.aiTool.kind === 'tool' && d.aiTool.description) || undefined;
-    paths[`${basePath}/${p.name}`] = {
-      post: {
-        operationId: p.toolName,
-        ...(description ? { summary: description } : {}),
-        ...(d.authn.kind === 'auth' ? { security: [{ bearer: [] }] } : { security: [] }),
-        ...(d.input.kind === 'schema'
-          ? { requestBody: { required: true, content: { 'application/json': { schema: p.jsonSchema.input ?? {} } } } }
-          : {}),
-        responses,
-      },
-    };
+    const post: OpenApiOperation = { operationId: p.toolName, security: d.authn.kind === 'auth' ? [{ bearer: [] }] : [], responses: Object.fromEntries(responses) };
+    if (description) {post.summary = description;}
+    if (d.input.kind === 'schema') {
+      post.requestBody = { required: true, content: { 'application/json': { schema: p.jsonSchema.input ?? {} } } };
+    }
+    paths[`${basePath}/${p.name}`] = { post };
   }
   return {
     openapi: '3.1.0',

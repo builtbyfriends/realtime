@@ -1,4 +1,7 @@
-import { pullLimit, type Change, type ChangeBatch, type PullResult } from './changes.js';
+import { pullLimit } from './changes.js';
+import type { Change, ChangeBatch, PullResult } from './changes.js';
+import type { JsonObject, JsonValue } from './schema.js';
+import { isJsonObject } from './storage.js';
 
 /**
  * Devices hold a hibernating WebSocket on the data object itself. Each socket's attachment says who it is and which
@@ -35,9 +38,11 @@ import { pullLimit, type Change, type ChangeBatch, type PullResult } from './cha
  * `watching` and `pull` answers carry `epoch`. A position only means something within its epoch, so a device that sees a
  * new one drops its positions and loads its groups again.
  */
-export type SocketIdentity = { actor: string; groups: string[]; topics?: string[]; queries?: LiveQuery[] };
+export type SocketIdentity = { actor: string; groups: Array<string>; topics?: Array<string>; queries?: Array<LiveQuery> };
 
-type LiveQuery = { id: string; name: string; input: unknown; topics: string[] };
+type LiveQuery = { id: string; name: string; input: JsonValue; topics: Array<string> };
+
+type SentSlot = { json?: string; run: number };
 
 /** A live query's answer: its value, or the error it threw. */
 export type QueryAnswer = { value: unknown } | { error: string };
@@ -46,23 +51,23 @@ type Socket = {
   send(message: string): void;
   close(code?: number, reason?: string): void;
   serializeAttachment(value: unknown): void;
-  deserializeAttachment(): unknown;
+  deserializeAttachment(): SocketIdentity | null;
 };
 
 type State = {
-  acceptWebSocket(ws: unknown, tags?: string[]): void;
-  getWebSockets(tag?: string): Socket[];
+  acceptWebSocket(ws: unknown, tags?: Array<string>): void;
+  getWebSockets(tag?: string): Array<Socket>;
 };
 
 /** What the sockets need from the data object. */
 export type SyncHooks = {
-  pull(actor: string, groups: string[], after: number, limit?: number): PullResult;
+  pull(actor: string, groups: Array<string>, after: number, limit?: number): PullResult;
   /** The changes as this actor sees them. Leave it out to send them as they are. */
-  view?(actor: string, changes: Change[]): Change[];
+  view?(actor: string, changes: Array<Change>): Array<Change>;
   /** The groups out of `groups` this actor may read. Leave it out to refuse every watch. */
-  access?(actor: string, groups: string[]): string[];
+  access?(actor: string, groups: Array<string>): Array<string>;
   /** The live topics out of `topics` this actor may hear. Leave it out to refuse every listen. */
-  topicAccess?(actor: string, topics: string[]): string[];
+  topicAccess?(actor: string, topics: Array<string>): Array<string>;
   /** Answers live query `name` for `actor`. Null refuses it. Leave it out to refuse every query. */
   query?(actor: string, name: string, input: unknown): QueryAnswer | null | Promise<QueryAnswer | null>;
   /** This storage's epoch, sent with positions. */
@@ -83,13 +88,13 @@ export class SyncSockets {
   private readonly hooks: SyncHooks;
   // Decision: what each query last sent and its latest run, in memory only. After the object wakes, the next answer goes out
   // even if it hasn't changed, which costs bytes and nothing else.
-  private readonly sent = new WeakMap<Socket, Map<string, { json?: string; run: number }>>();
+  private readonly sent = new WeakMap<Socket, Map<string, SentSlot>>();
   private pending = new Set<string>();
   private flushing = false;
 
   constructor(
     private readonly state: State,
-    hooks: SyncHooks | ((groups: string[], after: number, limit?: number) => PullResult),
+    hooks: SyncHooks | ((groups: Array<string>, after: number, limit?: number) => PullResult),
   ) {
     this.hooks = typeof hooks === 'function' ? { pull: (_actor, groups, after, limit) => hooks(groups, after, limit) } : hooks;
   }
@@ -97,7 +102,7 @@ export class SyncSockets {
   /** Accepts the server end of a WebSocketPair for this caller. */
   accept(ws: Socket, who: SocketIdentity): void {
     const attachment: SocketIdentity = { actor: who.actor, groups: [...new Set(who.groups)], topics: [] };
-    if (bytes(attachment) > MAX_ATTACHMENT) throw new Error('too many sync groups for one socket');
+    if (bytes(attachment) > MAX_ATTACHMENT) {throw new Error('too many sync groups for one socket');}
     this.state.acceptWebSocket(ws, [`actor:${who.actor}`]);
     ws.serializeAttachment(attachment);
   }
@@ -108,63 +113,60 @@ export class SyncSockets {
     for (const ws of this.state.getWebSockets()) {
       try {
         const who = identity(ws);
-        if (!who || !who.groups.some((g) => groups.has(g))) continue;
+        if (!who || !who.groups.some((g) => groups.has(g))) {continue;}
         const mine = new Set(who.groups);
         const changes = this.see(who.actor, batch.changes.filter((c) => mine.has(c.group)));
-        if (changes.length) trySend(ws, { type: 'changes', seq: batch.seq, changes });
-      } catch (e) {
-        fail(ws, 'sync broadcast failed', e);
+        if (changes.length) {trySend(ws, { type: 'changes', seq: batch.seq, changes });}
+      } catch (error) {
+        fail(ws, 'sync broadcast failed', error);
       }
     }
   }
 
   /** Answers a device's message. Returns false when it isn't a sync message, so the object can handle it. */
   message(ws: Socket, raw: string | ArrayBuffer): boolean {
-    if (typeof raw !== 'string') return false;
-    let msg: Incoming | null;
+    if (typeof raw !== 'string') {return false;}
+    const msg = parseMessage(raw);
+    if (!msg || typeof msg.type !== 'string' || !TYPES.has(msg.type)) {return false;}
     try {
-      msg = JSON.parse(raw);
-    } catch {
-      return false;
-    }
-    if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string' || !TYPES.includes(msg.type)) return false;
-    try {
-      this.handle(ws, msg);
-    } catch (e) {
-      fail(ws, `sync ${msg.type} failed`, e);
+      this.handle(ws, msg, msg.type);
+    } catch (error) {
+      fail(ws, `sync ${msg.type} failed`, error);
     }
     return true;
   }
 
-  private handle(ws: Socket, msg: Incoming): void {
+  private handle(ws: Socket, msg: JsonObject, type: string): void {
     const who = identity(ws);
-    if (!who) return;
+    if (!who) {return;}
     const badAfter = msg.after !== undefined && !(typeof msg.after === 'number' && Number.isFinite(msg.after) && msg.after >= 0);
-    if ((msg.type === 'pull' || msg.type === 'watch') && badAfter) {
+    if ((type === 'pull' || type === 'watch') && badAfter) {
       trySend(ws, { type: 'error', id: msg.id, error: 'bad after' });
       return;
     }
     const after = typeof msg.after === 'number' ? msg.after : 0;
     const limit = typeof msg.limit === 'number' ? msg.limit : undefined;
-    if (msg.type === 'pull') {
+    if (type === 'pull') {
       trySend(ws, { type: 'pull', id: msg.id, epoch: this.epoch(), ...this.pulled(who.actor, who.groups, after, limit) });
       return;
     }
-    if (msg.type === 'query') {
+    if (type === 'query') {
       this.subscribe(ws, who, msg);
       return;
     }
-    if (msg.type === 'unquery') {
+    if (type === 'unquery') {
       const ids = Array.isArray(msg.ids) ? msg.ids.filter((id) => typeof id === 'string' || typeof id === 'number').map(String) : [];
       this.save(ws, { ...who, queries: (who.queries ?? []).filter((q) => !ids.includes(q.id)) });
       const mine = this.sent.get(ws);
-      for (const id of ids) mine?.delete(id);
+      for (const id of ids) {
+        mine?.delete(id);
+      }
       return;
     }
-    if (msg.type === 'listen' || msg.type === 'unlisten') {
+    if (type === 'listen' || type === 'unlisten') {
       const topics = strings(msg.topics);
       const mine = who.topics ?? [];
-      if (msg.type === 'unlisten') {
+      if (type === 'unlisten') {
         this.save(ws, { ...who, topics: mine.filter((t) => !topics.includes(t)) });
         return;
       }
@@ -175,7 +177,7 @@ export class SyncSockets {
       return;
     }
     const asked = strings(msg.groups);
-    if (msg.type === 'unwatch') {
+    if (type === 'unwatch') {
       this.save(ws, { ...who, groups: who.groups.filter((g) => !asked.includes(g)) });
       return;
     }
@@ -189,22 +191,23 @@ export class SyncSockets {
     // Decision: without `after`, answer only the position. The device loads the groups through queries, which reads less than a pull from 0.
     const caught = msg.after === undefined ? { ...this.hooks.pull(who.actor, [], 0), more: false } : this.pulled(who.actor, allowed, after, limit);
     trySend(ws, { type: 'watching', id: msg.id, epoch: this.epoch(), groups: allowed, denied, ...caught });
+    return;
   }
 
   /**
    * Changes the groups an actor's sockets may read, after they join or leave something. Each socket is told what was
    * added (pull it from 0) and what was removed (drop it from the device).
    */
-  regroup(actor: string, groups: string[]): void {
+  regroup(actor: string, groups: Array<string>): void {
     const next = [...new Set(groups)];
     for (const ws of this.state.getWebSockets(`actor:${actor}`)) {
       const who = identity(ws);
-      if (!who) continue;
+      if (!who) {continue;}
       const added = next.filter((g) => !who.groups.includes(g));
       const removed = who.groups.filter((g) => !next.includes(g));
-      if (!added.length && !removed.length) continue;
-      if (this.save(ws, { ...who, groups: next })) trySend(ws, { type: 'groups', added, removed });
-      else fail(ws, 'sync regroup failed', new Error('too many sync groups for one socket'));
+      if (!added.length && !removed.length) {continue;}
+      if (this.save(ws, { ...who, groups: next })) {trySend(ws, { type: 'groups', added, removed });}
+      else {fail(ws, 'sync regroup failed', new Error('too many sync groups for one socket'));}
     }
   }
 
@@ -213,32 +216,32 @@ export class SyncSockets {
    * went private). Each socket is told what it lost.
    */
   recheck(): void {
-    const { access, topicAccess } = this.hooks;
     for (const ws of this.state.getWebSockets()) {
       try {
-        this.recheckOne(ws, access, topicAccess);
-      } catch (e) {
-        fail(ws, 'sync recheck failed', e);
+        this.recheckOne(ws);
+      } catch (error) {
+        fail(ws, 'sync recheck failed', error);
       }
     }
   }
 
-  private recheckOne(ws: Socket, access: SyncHooks['access'], topicAccess: SyncHooks['topicAccess']): void {
+  private recheckOne(ws: Socket): void {
+    const hooks = this.hooks;
     const who = identity(ws);
-    if (!who) return;
+    if (!who) {return;}
     const topics = who.topics ?? [];
-    const kept = who.groups.length && access ? access(who.actor, who.groups) : [];
-    const heard = topics.length && topicAccess ? topicAccess(who.actor, topics) : [];
+    const kept = who.groups.length && hooks.access ? hooks.access(who.actor, who.groups) : [];
+    const heard = topics.length && hooks.topicAccess ? hooks.topicAccess(who.actor, topics) : [];
     const queries = who.queries ?? [];
     const asked = [...new Set(queries.flatMap((q) => q.topics))];
-    const allowed = new Set(asked.length && topicAccess ? topicAccess(who.actor, asked) : []);
+    const allowed = new Set(asked.length && hooks.topicAccess ? hooks.topicAccess(who.actor, asked) : []);
     const dropped = queries.filter((q) => !q.topics.every((t) => allowed.has(t)));
     const removed = who.groups.filter((g) => !kept.includes(g));
     const deaf = topics.filter((t) => !heard.includes(t));
-    if (!removed.length && !deaf.length && !dropped.length) return;
+    if (!removed.length && !deaf.length && !dropped.length) {return;}
     ws.serializeAttachment({ ...who, groups: who.groups.filter((g) => kept.includes(g)), topics: topics.filter((t) => heard.includes(t)), queries: queries.filter((q) => !dropped.includes(q)) });
-    if (removed.length) trySend(ws, { type: 'groups', added: [], removed });
-    if (deaf.length) trySend(ws, { type: 'unheard', topics: deaf });
+    if (removed.length) {trySend(ws, { type: 'groups', added: [], removed });}
+    if (deaf.length) {trySend(ws, { type: 'unheard', topics: deaf });}
     for (const q of dropped) {
       this.sent.get(ws)?.delete(q.id);
       trySend(ws, { type: 'result', id: q.id, denied: true });
@@ -249,17 +252,17 @@ export class SyncSockets {
    * Tells each socket listening to one of these topics that it changed, so the device refetches what reads it, and
    * answers again each live query that reads one.
    */
-  publish(topics: string[]): void {
-    if (!topics.length) return;
+  publish(topics: Array<string>): void {
+    if (!topics.length) {return;}
     const touched = new Set(topics);
     for (const ws of this.state.getWebSockets()) {
       const who = identity(ws);
       const hit = who?.topics?.filter((t) => touched.has(t));
-      if (hit?.length) trySend(ws, { type: 'topics', topics: hit });
+      if (hit?.length) {trySend(ws, { type: 'topics', topics: hit });}
     }
-    if (!this.hooks.query) return;
-    for (const t of topics) this.pending.add(t);
-    if (this.flushing) return;
+    if (!this.hooks.query) {return;}
+    for (const t of topics) {this.pending.add(t);}
+    if (this.flushing) {return;}
     this.flushing = true;
     // Decision: commits that land in the same turn answer each query once, after the last of them.
     queueMicrotask(() => void this.flush());
@@ -270,20 +273,23 @@ export class SyncSockets {
     const touched = this.pending;
     this.pending = new Set();
     this.flushing = false;
-    if (!touched.size) return;
-    const runs: Promise<void>[] = [];
+    if (!touched.size) {return;}
+    const runs: Array<Promise<void>> = [];
     // Decision: one actor's sockets that ask the same thing share one run, since the answer depends only on who asks and what.
     const shared = new Map<string, Promise<QueryAnswer | null>>();
     for (const ws of this.state.getWebSockets()) {
       const who = identity(ws);
-      for (const q of who?.queries ?? []) if (q.topics.some((t) => touched.has(t))) runs.push(this.answer(ws, who!.actor, q, shared));
+      if (!who) {continue;}
+      for (const q of who.queries ?? []) {
+        if (q.topics.some((t) => touched.has(t))) {runs.push(this.answer(ws, who.actor, q, shared));}
+      }
     }
     await Promise.all(runs);
   }
 
-  private subscribe(ws: Socket, who: SocketIdentity, msg: { id?: unknown; name?: unknown; input?: unknown; topics?: unknown }): void {
+  private subscribe(ws: Socket, who: SocketIdentity, msg: JsonObject): void {
     const id = typeof msg.id === 'string' || typeof msg.id === 'number' ? String(msg.id) : null;
-    if (id === null) return;
+    if (id === null) {return;}
     const name = typeof msg.name === 'string' ? msg.name : '';
     const topics = strings(msg.topics);
     const allowed = name && topics.length <= MAX_ASKED && this.hooks.query && this.hooks.topicAccess ? this.hooks.topicAccess(who.actor, topics) : [];
@@ -291,19 +297,19 @@ export class SyncSockets {
     const query: LiveQuery = { id, name, input: msg.input ?? null, topics };
     if (!ok || !this.save(ws, { ...who, queries: [...(who.queries ?? []).filter((q) => q.id !== id), query] })) {
       // Decision: a query that is refused under an id also ends the query that id had before, so the device and the object agree.
-      if ((who.queries ?? []).some((q) => q.id === id)) this.drop(ws, id);
+      if ((who.queries ?? []).some((q) => q.id === id)) {this.drop(ws, id);}
       trySend(ws, { type: 'result', id, denied: true });
       return;
     }
     // Decision: a query sent again under the same id gets its answer again, even when the answer is the same.
     const slot = this.sent.get(ws)?.get(id);
-    if (slot) delete slot.json;
+    if (slot) {delete slot.json;}
     void this.answer(ws, who.actor, query);
   }
 
   private async answer(ws: Socket, actor: string, q: LiveQuery, shared?: Map<string, Promise<QueryAnswer | null>>): Promise<void> {
     let mine = this.sent.get(ws);
-    if (!mine) this.sent.set(ws, (mine = new Map()));
+    if (!mine) {this.sent.set(ws, (mine = new Map<string, SentSlot>()));}
     const slot = mine.get(q.id) ?? { run: 0 };
     const run = ++slot.run;
     mine.set(q.id, slot);
@@ -312,30 +318,30 @@ export class SyncSockets {
       const key = JSON.stringify([actor, q.name, q.input]);
       let asked = shared?.get(key);
       if (!asked) {
-        asked = Promise.resolve().then(() => this.hooks.query!(actor, q.name, q.input));
+        asked = Promise.resolve().then(() => this.hooks.query?.(actor, q.name, q.input) ?? null);
         shared?.set(key, asked);
       }
       answer = await asked;
-    } catch (e) {
-      answer = { error: e instanceof Error ? e.message : String(e) };
+    } catch (error) {
+      answer = { error: error instanceof Error ? error.message : String(error) };
     }
     // Decision: a later run started while this one waited, so its answer is the newer one.
-    if (slot.run !== run || mine.get(q.id) !== slot) return;
+    if (slot.run !== run || mine.get(q.id) !== slot) {return;}
     if (!answer) {
       this.drop(ws, q.id);
       trySend(ws, { type: 'result', id: q.id, denied: true });
       return;
     }
     const json = JSON.stringify({ type: 'result', id: q.id, ...answer });
-    if (json === slot.json) return;
+    if (json === slot.json) {return;}
     slot.json = json;
-    if (encoder.encode(json).length > MAX_RESULT) trySendRaw(ws, JSON.stringify({ type: 'result', id: q.id, error: 'too large' }));
-    else trySendRaw(ws, json);
+    if (encoder.encode(json).length > MAX_RESULT) {trySendRaw(ws, JSON.stringify({ type: 'result', id: q.id, error: 'too large' }));}
+    else {trySendRaw(ws, json);}
   }
 
   private drop(ws: Socket, id: string): void {
     const who = identity(ws);
-    if (who) this.save(ws, { ...who, queries: (who.queries ?? []).filter((q) => q.id !== id) });
+    if (who) {this.save(ws, { ...who, queries: (who.queries ?? []).filter((q) => q.id !== id) });}
     this.sent.get(ws)?.delete(id);
   }
 
@@ -343,40 +349,37 @@ export class SyncSockets {
     return this.hooks.epoch?.();
   }
 
-  private pulled(actor: string, groups: string[], after: number, limit?: number): PullResult {
+  private pulled(actor: string, groups: Array<string>, after: number, limit?: number): PullResult {
     let size = pullLimit(limit);
     for (;;) {
       const result = this.hooks.pull(actor, groups, after, size);
       const page = { ...result, changes: this.see(actor, result.changes) };
       // Decision: a page that wouldn't fit in one message is read again at half the size. A page of one commit can't shrink.
-      const fits = bytes(page.changes) <= MAX_RESULT;
-      if (fits) return page;
+      if (bytes(page.changes) <= MAX_RESULT) {return page;}
       // Decision: one document too large for a message goes out as a removal and is logged. Closing the socket would bring
       // the device back to the same document on each reconnect.
-      if (page.changes.length === 1) {
-        const [c] = page.changes;
-        console.error(`sync change of ${c!.table} ${c!.id} is too large for a message`);
-        return { ...page, changes: [{ ...c!, doc: null }] };
+      const [only] = page.changes;
+      if (only && page.changes.length === 1) {
+        console.error(`sync change of ${only.table} ${only.id} is too large for a message`);
+        return { ...page, changes: [{ ...only, doc: null }] };
       }
-      if (size === 1) return page;
+      if (size === 1) {return page;}
       size = Math.max(1, Math.floor(Math.min(size, result.changes.length) / 2));
     }
   }
 
-  private see(actor: string, changes: Change[]): Change[] {
+  private see(actor: string, changes: Array<Change>): Array<Change> {
     return this.hooks.view ? this.hooks.view(actor, changes) : changes;
   }
 
   private save(ws: Socket, who: SocketIdentity): boolean {
-    if (bytes(who) > MAX_ATTACHMENT) return false;
+    if (bytes(who) > MAX_ATTACHMENT) {return false;}
     ws.serializeAttachment(who);
     return true;
   }
 }
 
-type Incoming = { type: string; after?: unknown; id?: unknown; limit?: unknown; groups?: unknown; topics?: unknown; name?: unknown; input?: unknown; ids?: unknown };
-
-const TYPES = ['pull', 'watch', 'unwatch', 'listen', 'unlisten', 'query', 'unquery'];
+const TYPES = new Set(['pull', 'watch', 'unwatch', 'listen', 'unlisten', 'query', 'unquery']);
 
 const encoder = new TextEncoder();
 
@@ -393,12 +396,21 @@ function fail(ws: Socket, what: string, error: unknown): void {
   }
 }
 
-function strings(v: unknown): string[] {
+function parseMessage(raw: string): JsonObject | null {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return isJsonObject(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function strings(v: unknown): Array<string> {
   return Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === 'string'))] : [];
 }
 
 function identity(ws: Socket): SocketIdentity | null {
-  const v = ws.deserializeAttachment() as SocketIdentity | null;
+  const v = ws.deserializeAttachment();
   return v && typeof v.actor === 'string' && Array.isArray(v.groups) ? v : null;
 }
 

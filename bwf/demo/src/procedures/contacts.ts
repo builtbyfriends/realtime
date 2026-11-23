@@ -52,7 +52,7 @@ export const create = procedure('contacts.create')
   .aiTool({ description: 'Create a contact in an organization', needsApproval: true })
   .handler(async ({ input, fail }) => {
     const dupe = await db.select().from(contacts).where(and(eq(contacts.orgId, input.orgId), eq(contacts.email, input.email))).get();
-    if (dupe) return fail('DUPLICATE_EMAIL');
+    if (dupe) {return fail('DUPLICATE_EMAIL');}
     const row = { id: `c${crypto.randomUUID().slice(0, 8)}`, ...input, createdAt: Date.now() };
     await db.insert(contacts).values(row);
     return row;
@@ -68,7 +68,7 @@ export const remove = procedure('contacts.delete')
   .aiTool({ description: 'Delete a contact permanently', needsApproval: true })
   .handler(async ({ input, ctx, fail }) => {
     const where = and(eq(contacts.id, input.id), eq(contacts.orgId, ctx.orgId));
-    if (!(await db.select().from(contacts).where(where).get())) return fail('NOT_FOUND');
+    if (!(await db.select().from(contacts).where(where).get())) {return fail('NOT_FOUND');}
     await db.delete(contacts).where(where);
     return { deleted: true };
   });

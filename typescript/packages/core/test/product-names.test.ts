@@ -7,9 +7,9 @@ import { describe, expect, it } from 'vitest';
 const appName = ['ded', 'worc'].join('');
 
 // Decision: a deliberate mention goes here with its reason. A row that matches no file fails, so the list stays current.
-const allowed: { file: string; reason: string }[] = [];
+const allowed: Array<{ file: string; reason: string }> = [];
 
-function filesThatNameTheApp(): string[] {
+function filesThatNameTheApp(): Array<string> {
   const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
   try {
     return execFileSync('git', ['grep', '-Iil', appName], { cwd: root, encoding: 'utf8' })
@@ -17,7 +17,7 @@ function filesThatNameTheApp(): string[] {
       .filter(Boolean);
   } catch (error) {
     // Decision: git grep exits with 1 when nothing matches.
-    if ((error as { status?: number }).status === 1) return [];
+    if ((error as { status?: number }).status === 1) {return [];}
     throw error;
   }
 }

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import type { InputOf, OutputOf } from '@builtbyfriends/realtime';
-import { stableKey, type Live, type MutateOptions, type Procs, type QueryOptions, type QueryState, type Typed } from './index.js';
+import { stableKey } from './index.js';
+import type { Live, MutateOptions, Procs, QueryOptions, QueryState, Typed } from './index.js';
 
 export type UseQueryResult<T> = QueryState<T> & {
   /** `status === 'loading'`, for the first load only. Later refetches keep the old data. */
@@ -24,15 +25,14 @@ export function createLiveHooks<R extends Typed>(live: Live<R>) {
     input: InputOf<Procs<R>[N]>,
     options: QueryOptions = {},
   ): UseQueryResult<OutputOf<Procs<R>[N]>> {
-    const topicsKey = stableKey(options.topics ?? null);
-    const handle = useMemo(
-      () => live.query(name, input, options),
-      // Decision: the input and topics are compared by value with sorted keys, so an inline object, or
-      // the same object with its keys in another order, doesn't resubscribe.
-      [name, stableKey(input), topicsKey, options.enabled],
-    );
+    // Decision: the input and topics are compared by value with sorted keys, so an inline object, or
+    // the same object with its keys in another order, doesn't resubscribe.
+    const key = `${stableKey(input)}:${stableKey(options.topics ?? null)}:${String(options.enabled)}`;
+    const [kept, setKept] = useState({ key, input, options });
+    if (kept.key !== key) {setKept({ key, input, options });}
+    const handle = useMemo(() => live.query(name, kept.input, kept.options), [name, kept]);
     const state = useSyncExternalStore(handle.subscribe, handle.getSnapshot, handle.getSnapshot);
-    return { ...state, loading: state.status === 'loading', refetch: handle.refetch } as UseQueryResult<OutputOf<Procs<R>[N]>>;
+    return { ...state, loading: state.status === 'loading', refetch: handle.refetch };
   }
 
   function useMutation<N extends keyof Procs<R> & string>(name: N) {
@@ -44,8 +44,8 @@ export function createLiveHooks<R extends Typed>(live: Live<R>) {
         setError(undefined);
         try {
           return await live.mutate(name, input, options);
-        } catch (e) {
-          const err = e instanceof Error ? e : new Error(String(e));
+        } catch (error_) {
+          const err = error_ instanceof Error ? error_ : new Error(String(error_));
           setError(err);
           throw err;
         } finally {

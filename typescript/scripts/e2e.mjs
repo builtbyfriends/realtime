@@ -24,11 +24,12 @@ dev.stdout.on('data', (d) => (log += d));
 dev.stderr.on('data', (d) => (log += d));
 try {
   for (let i = 0; ; i++) {
-    if (i > 60) throw new Error(`wrangler dev did not start:\n${log}`);
-    try {
-      if ((await fetch(`${base}/rpc/status`, { method: 'POST' })).ok) break;
-    } catch {}
-    await new Promise((r) => setTimeout(r, 500));
+    if (i > 60) {throw new Error(`wrangler dev did not start:\n${log}`);}
+    const ready = await fetch(`${base}/rpc/status`, { method: 'POST' }).then((res) => res.ok, () => false);
+    if (ready) {break;}
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   console.log(`wrangler dev on ${base}`);
   const post = (name, body, token) =>
@@ -49,8 +50,8 @@ try {
   const cli = (...args) => {
     try {
       return { code: 0, out: execFileSync('node', [join(root, 'packages/cli/dist/bin.js'), ...args], { env: { ...process.env, REALTIME_URL: base, REALTIME_TOKEN: 't-bob' }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
-    } catch (e) {
-      return { code: e.status, out: e.stdout, err: e.stderr };
+    } catch (error) {
+      return { code: error.status, out: error.stdout, err: error.stderr };
     }
   };
   await check('CLI: lists commands from the manifest', async () => assert.match(cli().out, /contacts search\s+Search contacts by name/));

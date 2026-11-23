@@ -14,7 +14,8 @@ export type FetchEventSourceOptions = {
   fetch?: typeof fetch;
 };
 
-type Listener = (event: any) => void;
+type StreamEvent = { type: string; data?: string; error?: unknown };
+type Listener = (event: StreamEvent) => void;
 
 export type FetchEventSourceConstructor = new (
   url: string,
@@ -37,7 +38,12 @@ export function fetchEventSource(options: FetchEventSourceOptions): FetchEventSo
     }
 
     addEventListener(type: string, listener: Listener) {
-      (this.#listeners.get(type) ?? this.#listeners.set(type, new Set()).get(type)!).add(listener);
+      let listeners = this.#listeners.get(type);
+      if (!listeners) {
+        listeners = new Set();
+        this.#listeners.set(type, listeners);
+      }
+      listeners.add(listener);
     }
 
     removeEventListener(type: string, listener: Listener) {
@@ -49,9 +55,10 @@ export function fetchEventSource(options: FetchEventSourceOptions): FetchEventSo
       this.#abort.abort();
     }
 
-    #emit(type: string, event: object = {}) {
-      if (this.#closed) return;
-      for (const listener of [...(this.#listeners.get(type) ?? [])]) listener({ type, ...event });
+    #emit(type: string, event: { data?: string; error?: unknown } = {}) {
+      if (this.#closed) {return;}
+      // oxlint-disable-next-line unicorn/no-useless-spread -- a listener may remove itself while the loop runs, so it walks a copy
+      for (const listener of [...(this.#listeners.get(type) ?? [])]) {listener({ type, ...event });}
     }
 
     async #run() {
@@ -60,7 +67,7 @@ export function fetchEventSource(options: FetchEventSourceOptions): FetchEventSo
         const headers = new Headers(typeof options.headers === 'function' ? await options.headers() : options.headers);
         headers.set('accept', 'text/event-stream');
         const response = await (options.fetch ?? fetch)(this.url, { headers, signal: this.#abort.signal, cache: 'no-store' });
-        if (!response.ok || !response.body) throw Object.assign(new Error(`live: stream answered ${response.status}`), { status: response.status });
+        if (!response.ok || !response.body) {throw Object.assign(new Error(`live: stream answered ${response.status}`), { status: response.status });}
         this.#emit('open');
         const reader = response.body
           .pipeThrough(new TextDecoderStream())
@@ -68,7 +75,7 @@ export function fetchEventSource(options: FetchEventSourceOptions): FetchEventSo
           .getReader();
         for (;;) {
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done) {break;}
           this.#emit(value.event || 'message', { data: value.data });
         }
         this.#emit('error');

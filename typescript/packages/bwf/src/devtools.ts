@@ -21,8 +21,8 @@ type Exchange = {
   resHeaders?: Record<string, string>;
   resBody?: unknown;
   error?: string;
-  calls: Omit<CallTrace, 'request'>[];
-  gates: Omit<ToolGateTrace, 'request'>[];
+  calls: Array<Omit<CallTrace, 'request'>>;
+  gates: Array<Omit<ToolGateTrace, 'request'>>;
 };
 
 const MAX = 400;
@@ -41,10 +41,10 @@ const maskCookie = (pair: string) => {
 };
 
 const mask = (value: string, name = 'authorization') => {
-  if (/^cookie$/i.test(name)) return value.split(';').map((pair) => maskCookie(pair.trim())).join('; ');
+  if (/^cookie$/i.test(name)) {return value.split(';').map((pair) => maskCookie(pair.trim())).join('; ');}
   if (/^set-cookie$/i.test(name)) {
-    const [first, ...attributes] = value.split(';');
-    return [maskCookie(first!.trim()), ...attributes.map((a) => a.trim())].join('; ');
+    const [first = '', ...attributes] = value.split(';');
+    return [maskCookie(first.trim()), ...attributes.map((a) => a.trim())].join('; ');
   }
   const [scheme, token] = value.includes(' ') ? value.split(/ (.*)/s) : ['', value];
   const shown = show(token ?? '');
@@ -54,20 +54,38 @@ const mask = (value: string, name = 'authorization') => {
 const headers = (h: Headers) => {
   const out: Record<string, string> = {};
   h.forEach((v, k) => {
-    if (!NOISE_HEADERS.test(k)) out[k] = SECRET_HEADERS.test(k) ? mask(v, k) : v;
+    if (!NOISE_HEADERS.test(k)) {out[k] = SECRET_HEADERS.test(k) ? mask(v, k) : v;}
   });
   return out;
 };
 
-function parseBody(text: string, contentType: string | null): unknown {
-  if (!text) return undefined;
+type Body = string | number | boolean | object | null | undefined;
+
+const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+
+function errorMessage(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'message' in error) {return String(error.message);}
+  return String(error);
+}
+
+const isBody = (value: unknown): value is Body =>
+  value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'object';
+
+function parseJson(text: string): Body {
+  const value: unknown = JSON.parse(text);
+  if (isBody(value)) {return value;}
+  throw new TypeError('not a JSON value');
+}
+
+function parseBody(text: string, contentType: string | null): Body {
+  if (!text) {return undefined;}
   if (contentType?.includes('text/event-stream')) {
-    const events: unknown[] = [];
+    const events: Array<Body> = [];
     const parser = createParser({
       onEvent: ({ data }) => {
-        if (events.length >= MAX_EVENTS) return;
+        if (events.length >= MAX_EVENTS) {return;}
         try {
-          events.push(JSON.parse(data));
+          events.push(parseJson(data));
         } catch {
           events.push(data);
         }
@@ -78,34 +96,34 @@ function parseBody(text: string, contentType: string | null): unknown {
     return { sse: events };
   }
   const cut = `${text.slice(0, MAX_BODY)}… (${text.length} chars)`;
-  if (text.length > MAX_BODY * 10) return cut;
+  if (text.length > MAX_BODY * 10) {return cut;}
   try {
-    return JSON.parse(text);
+    return parseJson(text);
   } catch {
     return text.length > MAX_BODY ? cut : text;
   }
 }
 
-const shownUrl = (raw: string) => raw.replace(/([?&])([^=&#]+)=([^&#]*)/g, (all, sep: string, name: string, value: string) => (SECRET_PARAMS.test(name) ? `${sep}${name}=${show(value)}` : all));
+const shownUrl = (raw: string) => raw.replaceAll(/([?&])([^=&#]+)=([^&#]*)/g, (all, sep: string, name: string, value: string) => (SECRET_PARAMS.test(name) ? `${sep}${name}=${show(value)}` : all));
 
 export function createDevtools(registry: Registry, app: { name: string; basePath: string; mcpRoute: string }) {
   const route = '/__realtime';
-  const exchanges: Exchange[] = [];
+  const exchanges: Array<Exchange> = [];
   const byRequest = new WeakMap<Request, Exchange>();
   let seq = 0;
   let rev = 0;
 
   const touch = (ex: Exchange) => (ex.rev = ++rev);
   const add = (ex: Omit<Exchange, 'id' | 'rev'>) => {
-    const full = { ...ex, id: ++seq, rev: ++rev } as Exchange;
+    const full = { ...ex, id: ++seq, rev: ++rev };
     exchanges.push(full);
-    if (exchanges.length > MAX) exchanges.splice(0, exchanges.length - MAX);
+    if (exchanges.length > MAX) {exchanges.splice(0, exchanges.length - MAX);}
     return full;
   };
   const kindOf = (path: string): Kind | null => {
-    if (path === app.mcpRoute) return 'mcp';
-    if (path.startsWith(`${app.basePath}/ai/`)) return 'ai';
-    if (path === app.basePath || path.startsWith(`${app.basePath}/`)) return 'rpc';
+    if (path === app.mcpRoute) {return 'mcp';}
+    if (path.startsWith(`${app.basePath}/ai/`)) {return 'ai';}
+    if (path === app.basePath || path.startsWith(`${app.basePath}/`)) {return 'rpc';}
     return null;
   };
 
@@ -117,8 +135,8 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
       ex = add({ at: event.at, kind: 'direct', method: 'CALL', url: '', path: event.type === 'call' ? event.procedure : event.tool, reqHeaders: {}, calls: [], gates: [] });
       byRequest.set(request, ex);
     }
-    if (rest.type === 'call') ex.calls.push(rest);
-    else ex.gates.push(rest);
+    if (rest.type === 'call') {ex.calls.push(rest);}
+    else {ex.gates.push(rest);}
     touch(ex);
   });
 
@@ -155,15 +173,13 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
         .catch(() => {});
       touch(ex);
       return res;
-    } catch (e) {
-      ex.error = (e as Error)?.message ?? String(e);
+    } catch (error) {
+      ex.error = errorMessage(error);
       ex.ms = Date.now() - ex.at;
       touch(ex);
-      throw e;
+      throw error;
     }
   };
-
-  const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
   const registryInfo = () => ({
     app,
@@ -188,7 +204,7 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
         const since = Number(url.searchParams.get('since') ?? 0);
         return json({ rev, exchanges: exchanges.filter((e) => e.rev > since), ids: exchanges.map((e) => e.id) });
       }
-      if (sub === '/registry') return json(registryInfo());
+      if (sub === '/registry') {return json(registryInfo());}
       if (sub === '/clear' && request.method === 'POST') {
         exchanges.length = 0;
         rev++;
@@ -200,12 +216,11 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
     async record(request: Request, waitUntil: (p: Promise<unknown>) => void, run: () => Promise<Response | null>): Promise<Response | null> {
       const url = new URL(request.url);
       const kind = kindOf(url.pathname);
-      if (!kind) return run();
+      if (!kind) {return run();}
       const reqText = request.method === 'GET' || request.method === 'HEAD' ? '' : await request.clone().text().catch(() => '');
-      const ex = add({
+      const entry: Omit<Exchange, 'id' | 'rev'> = {
         at: Date.now(),
         kind,
-        ...(kind === 'rpc' ? { surface: request.headers.get('x-realtime-surface') === 'cli' ? 'cli' : 'http' } : {}),
         method: request.method,
         url: shownUrl(request.url),
         path: url.pathname,
@@ -213,7 +228,9 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
         reqBody: parseBody(reqText, request.headers.get('content-type')),
         calls: [],
         gates: [],
-      });
+      };
+      if (kind === 'rpc') {entry.surface = request.headers.get('x-realtime-surface') === 'cli' ? 'cli' : 'http';}
+      const ex = add(entry);
       byRequest.set(request, ex);
       try {
         const res = await run();
@@ -236,11 +253,11 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
         );
         touch(ex);
         return res;
-      } catch (e) {
-        ex.error = (e as Error)?.message ?? String(e);
+      } catch (error) {
+        ex.error = errorMessage(error);
         ex.ms = Date.now() - ex.at;
         touch(ex);
-        throw e;
+        throw error;
       }
     },
   };

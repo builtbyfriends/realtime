@@ -20,3 +20,9 @@ This repository takes an app as input and doesn't know which app it is. Code, te
 ## Comments
 
 Code comments tend to repeat the code, go stale, or excuse a shortcut, so the `realtime/no-comments` oxlint rule (`lint/comments.mjs`, `bun run lint` in `typescript/`) bans them. It allows a decision record that starts with `Decision:`, tool directives such as `@ts-expect-error <why>`, and JSDoc on the published API in `typescript/packages/*/src`. `/delete-comment` (`.claude/skills/delete-comment`) walks through an audit.
+
+## Lint
+
+`bun run lint` in `typescript/` runs oxlint with `lint/oxlint.config.ts`. The config starts from Cloudflare's preset (`@cloudflare/oxlint-config`), which is type-aware and reports as errors. Its `quality/*` rules catch type shortcuts such as `as unknown as T`, `object` parameters and `Record<string, unknown>`. On top of that come the comment rule and `eslint-plugin-react-you-might-not-need-an-effect`. The demos in `bwf/` lint with `lint/oxlint.demos.config.ts`, the same rules without type information, because their dependencies aren't installed.
+
+The lint packages install into `lint/` with bun, so the npm lockfile in `typescript/` stays as it is. A rule that doesn't fit some files is turned off for them in the config with a `Decision:` line. A cast the code needs at a boundary gets an `oxlint-disable-next-line <rule> -- <reason>`.

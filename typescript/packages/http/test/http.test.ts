@@ -9,7 +9,7 @@ const analytics = memoryAnalytics();
 const registry = defineRegistry([getContact, purge, ping], { analytics });
 const rpc = rpcHandler(registry, { openapi: { title: 'Test', version: '1' } });
 const ctx = { waitUntil: (_p: Promise<unknown>) => {} };
-const fetchVia: typeof fetch = async (input, init) => rpc(new Request(input as string, init), env, ctx);
+const fetchVia: typeof fetch = async (input, init) => rpc(new Request(input, init), env, ctx);
 const post = (path: string, body?: unknown, headers: Record<string, string> = {}) =>
   rpc(new Request(`https://api.test${path}`, { method: 'POST', body: body === undefined ? '' : JSON.stringify(body), headers }), env, ctx);
 
@@ -35,8 +35,8 @@ describe('rpcHandler', () => {
   it('uses the built-in message for an unknown procedure everywhere, and sends data null for no value', async () => {
     const outside = await rpc(new Request('https://api.test/elsewhere', { method: 'POST' }), env, ctx);
     const unknown = await post('/rpc/nope');
-    expect(((await outside.json()) as any).error.message).toBe('No such procedure');
-    expect(((await unknown.json()) as any).error.message).toBe('No such procedure');
+    expect(((await outside.json())).error.message).toBe('No such procedure');
+    expect(((await unknown.json())).error.message).toBe('No such procedure');
     const { toResponse } = await import('@builtbyfriends/realtime-http');
     expect(await toResponse({ ok: true, status: 200, value: undefined }).text()).toBe('{"data":null}');
   });
@@ -78,27 +78,27 @@ describe('typed client', () => {
   });
 
   it('throws RpcError with the code', async () => {
-    const err = await client.call('contacts.get', { orgId: 'o1', id: 'missing' }).catch((e) => e);
+    const err = await client.call('contacts.get', { orgId: 'o1', id: 'missing' }).catch((error: unknown) => error);
     expect(err).toBeInstanceOf(RpcError);
     expect(err).toMatchObject({ code: 'NOT_FOUND', status: 404 });
   });
 
-  const answering = (res: () => Response) => createClient<typeof registry>('https://api.test', { fetch: (async () => res()) as typeof fetch });
+  const answering = (res: () => Response) => createClient<typeof registry>('https://api.test', { fetch: (async () => res()) });
 
   it('rejects with RpcError INTERNAL when a 200 answer is not JSON', async () => {
-    const err = await answering(() => new Response('<html>', { status: 200 })).call('ping').catch((e) => e);
+    const err = await answering(() => new Response('<html>', { status: 200 })).call('ping').catch((error: unknown) => error);
     expect(err).toBeInstanceOf(RpcError);
     expect(err).toMatchObject({ code: 'INTERNAL', status: 200 });
   });
 
   it('rejects with RpcError INTERNAL when the body is JSON null', async () => {
-    const err = await answering(() => new Response('null', { status: 200 })).call('ping').catch((e) => e);
+    const err = await answering(() => new Response('null', { status: 200 })).call('ping').catch((error: unknown) => error);
     expect(err).toBeInstanceOf(RpcError);
     expect(err).toMatchObject({ code: 'INTERNAL', status: 200 });
   });
 
   it('gives an error body whose error is not an object the code INTERNAL', async () => {
-    const err = await answering(() => Response.json({ error: 'boom' }, { status: 500 })).call('ping').catch((e) => e);
+    const err = await answering(() => Response.json({ error: 'boom' }, { status: 500 })).call('ping').catch((error: unknown) => error);
     expect(err).toBeInstanceOf(RpcError);
     expect(err).toMatchObject({ code: 'INTERNAL', status: 500 });
   });
