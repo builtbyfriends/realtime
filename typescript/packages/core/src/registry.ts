@@ -304,6 +304,24 @@ export function defineRegistry<const P extends readonly AnyProcedure[]>(
     const surfaceConcern = SURFACE_CONCERN[exec.surface];
     if (surfaceConcern) step(surfaceConcern, 'pass', `called over ${exec.surface}`);
 
+    // Decision: the actor id is a label for traces and analytics, so a provider whose `actorId` throws doesn't fail the call.
+    const actorOf = (who: unknown): string | undefined => {
+      if (d.authn.kind !== 'auth') return undefined;
+      try {
+        return d.authn.provider.actorId?.(who) ?? undefined;
+      } catch (e) {
+        onError(e, info('authn.actorId'));
+        return undefined;
+      }
+    };
+    const shown = (props: AnalyticsProps): string => {
+      try {
+        return JSON.stringify(props);
+      } catch {
+        return '(props that JSON can\'t show)';
+      }
+    };
+
     let ctx: unknown = null;
     if (d.authn.kind === 'auth') {
       try {
@@ -317,13 +335,20 @@ export function defineRegistry<const P extends readonly AnyProcedure[]>(
         step('authn', 'fail', 'no caller: 401 UNAUTHENTICATED');
         return builtinFailure('UNAUTHENTICATED');
       }
-      const actor = d.authn.provider.actorId?.(ctx);
+      const actor = actorOf(ctx);
       step('authn', 'pass', actor ? `actor ${actor}` : 'signed in');
     } else step('authn', 'pass', d.authn.reason);
 
     let input: unknown = undefined;
     if (d.input.kind === 'schema') {
-      const r = await validate(d.input.schema, rawInput);
+      let r: Awaited<ReturnType<typeof validate>>;
+      try {
+        r = await validate(d.input.schema, rawInput);
+      } catch (e) {
+        onError(e, info('input'));
+        step('input', 'fail', 'schema threw: 500 INTERNAL');
+        return builtinFailure('INTERNAL');
+      }
       if (!r.ok) {
         step('input', 'fail', `400 INVALID_INPUT: ${r.issues.map((i) => i.message).join('; ')}`);
         return builtinFailure('INVALID_INPUT', r.issues);
@@ -407,7 +432,7 @@ export function defineRegistry<const P extends readonly AnyProcedure[]>(
       } catch (e) {
         onError(e, info('analytics.props'));
       }
-      const actorId = d.authn.kind === 'auth' && ctx != null ? d.authn.provider.actorId?.(ctx) : undefined;
+      const actorId = ctx != null ? actorOf(ctx) : undefined;
       const event: AnalyticsEvent = {
         event: spec.event,
         procedure: name,
@@ -419,7 +444,7 @@ export function defineRegistry<const P extends readonly AnyProcedure[]>(
         ...(actorId ? { actorId } : {}),
         props,
       };
-      step('analytics', 'pass', `${spec.event} ${JSON.stringify(props)}`);
+      step('analytics', 'pass', `${spec.event} ${shown(props)}`);
       waitUntil(
         Promise.resolve()
           .then(() => provider.track(event, exec.env))
