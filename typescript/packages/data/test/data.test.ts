@@ -438,3 +438,91 @@ describe('client', () => {
     expect(() => client.query.nope).not.toThrow();
   });
 });
+
+describe('round 4 guards', () => {
+  const schema = defineSchema({
+    notes: table<{ room: string; text: string }>({ sync: { group: (n) => `room:${n.room}` } }),
+    vecs: table<{ v: number[] }>({ vectors: { e: { field: 'v', dimensions: 2 } }, sync: { group: () => 'g' } }),
+  });
+  function setup(extra: Record<string, unknown> = {}) {
+    const data = defineData({
+      schema,
+      functions: ({ mutation }) => ({
+        add: mutation((ctx, a: { room: string; text: string }) => ctx.db.insert('notes', a)),
+        edit: mutation((ctx, a: { id: string; text: string }) => ctx.db.patch('notes', a.id, { text: a.text })),
+        move: mutation((ctx, a: { id: string; room: string }) => ctx.db.patch('notes', a.id, { room: a.room })),
+        sched: mutation((ctx) => {
+          ctx.db.insert('notes', { room: 'other', text: 'x' });
+          ctx.scheduler.runAfter(0, 'j');
+        }),
+        late: mutation((async (ctx: { scheduler: { runAfter(ms: number, name: string, args: unknown, o: { id: string }): string } }) => {
+          await null;
+          ctx.scheduler.runAfter(0, 'j', null, { id: 'leak' });
+        }) as never),
+        forever: mutation((ctx) => void ctx.scheduler.runAfter(Infinity, 'j', null, { id: 'inf' })),
+        badVector: mutation((ctx) => {
+          const id = ctx.db.insert('vecs', { v: [1, 2] });
+          try {
+            ctx.db.patch('vecs', id, { v: [1, 2, 3] });
+          } catch {}
+          return id;
+        }),
+      }),
+      jobs: (job) => ({ j: job(() => {}) }),
+      ...extra,
+    });
+    const engine = data.engine(memoryStorage());
+    engine.init();
+    const seen: number[] = [];
+    engine.listen((b) => seen.push(b.seq));
+    const m = (name: string, args?: unknown) => engine.run('mutation', name, args) as Promise<string>;
+    return { engine, seen, m };
+  }
+
+  it('tells devices about commits in the order they landed, when one of them also sets the alarm', async () => {
+    const { seen, m } = setup();
+    const id = await m('add', { room: 'a', text: 'v0' });
+    seen.length = 0;
+    await Promise.all([m('sched'), m('edit', { id, text: 'v2' })]);
+    expect(seen).toEqual([...seen].sort((a, b) => a - b));
+    expect(seen).toHaveLength(2);
+  });
+
+  it('does not schedule a job after the mutation ended', async () => {
+    const { engine, m } = setup();
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    await expect(m('late')).rejects.toThrow('returned a promise');
+    await new Promise((r) => setTimeout(r, 0));
+    process.off('unhandledRejection', unhandled);
+    expect(engine.scheduler().get('leak')).toBeNull();
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('refuses a job time that is not a finite number', async () => {
+    const { engine, m } = setup();
+    await expect(m('forever')).rejects.toThrow('finite');
+    expect(engine.scheduler().get('inf')).toBeNull();
+  });
+
+  it('refuses a vector of the wrong length before it writes the row', async () => {
+    const { engine, m } = setup();
+    await m('badVector');
+    const docs = engine.pull(['g'], 0).changes.map((c) => c.doc);
+    expect(docs).toMatchObject([{ v: [1, 2] }]);
+  });
+
+  it('pulls a move as the removal first, like the live message', async () => {
+    const { engine, m } = setup();
+    const id = await m('add', { room: 'z', text: 't' });
+    await m('move', { id, room: 'a' });
+    const moved = engine.pull(['room:a', 'room:z'], 1).changes.map((c) => `${c.group}:${c.doc ? 'put' : 'removed'}`);
+    expect(moved).toEqual(['room:z:removed', 'room:a:put']);
+  });
+
+  it('denies a group when the access hook returns something other than true', () => {
+    const { engine } = setup({ syncAccess: async () => false });
+    expect(engine.access('u', ['secret'])).toEqual([]);
+  });
+});
+

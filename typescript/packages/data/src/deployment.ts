@@ -282,7 +282,7 @@ export class Engine {
     const ctx = this.reader();
     return topics.filter((t) => {
       try {
-        return check(ctx, actor, t);
+        return check(ctx, actor, t) === true;
       } catch (e) {
         console.error(`syncTopics for "${t}" failed`, e);
         return false;
@@ -359,7 +359,7 @@ export class Engine {
     const ctx = this.reader();
     return groups.filter((g) => {
       try {
-        return check(ctx, actor, g);
+        return check(ctx, actor, g) === true;
       } catch (e) {
         console.error(`syncAccess for "${g}" failed`, e);
         return false;
@@ -406,6 +406,7 @@ export class Engine {
       });
     } finally {
       db.end();
+      scheduler.end();
     }
     await this.afterCommit(db.touched, scheduler.changed, batch);
     return result;
@@ -491,19 +492,17 @@ export class Engine {
   }
 
   private async afterCommit(touched: Set<string>, queueChanged: boolean, batch: ChangeBatch | null = null): Promise<void> {
-    // Decision: the write is committed, so devices hear about it even when the alarm can't be set. The caller still gets the error.
-    try {
-      if (queueChanged) await this.arm(this.scheduler());
-    } finally {
-      this.fanOut(touched, batch);
-    }
+    // Decision: devices hear about the commit before the alarm is set. Setting it waits, and a commit that came in during the
+    // wait would go out first. It also means devices hear when the alarm can't be set, and the caller still gets the error.
+    this.fanOut(touched, batch);
+    if (queueChanged) await this.arm(this.scheduler());
   }
 
   private fanOut(touched: Set<string>, batch: ChangeBatch | null): void {
     // Decision: access is checked again before the commit goes out, so a reader the commit removed doesn't get what it wrote.
     if (touched.size && this.rechecks.length) {
       try {
-        if (this.def.syncRecheck?.([...touched])) for (const fn of this.rechecks) fn();
+        if (this.def.syncRecheck?.([...touched]) === true) for (const fn of this.rechecks) fn();
       } catch (e) {
         console.error('sync recheck failed', e);
       }

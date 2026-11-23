@@ -143,7 +143,7 @@ export function pull(storage: DataStorage, schema: Schema, groups: readonly stri
   const mine = JSON.stringify(groups);
   const rows = run<{ tbl: string; id: string; grp: string; seq: number; deleted: number }>(
     storage,
-    `SELECT tbl,id,grp,seq,deleted FROM _changes WHERE grp IN (SELECT value FROM json_each(?)) AND seq > ? ${after === 0 ? 'AND deleted = 0' : ''} ORDER BY seq LIMIT ?`,
+    `SELECT tbl,id,grp,seq,deleted FROM _changes WHERE grp IN (SELECT value FROM json_each(?)) AND seq > ? ${after === 0 ? 'AND deleted = 0' : ''} ORDER BY seq, deleted DESC LIMIT ?`,
     mine,
     after,
     limit + 1,
