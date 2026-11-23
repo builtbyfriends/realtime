@@ -41,9 +41,9 @@ export type TopicRule = {
  */
 export function topicPolicy(rules: TopicRule[]) {
   const matches = (pattern: RegExp, topic: string) => {
-    // Decision: a fresh copy without g or y, so lastIndex never carries over between calls.
-    const m = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, '')).exec(topic);
-    return m && m[0] === topic ? m : null;
+    // Decision: a fresh copy without g or y, so lastIndex never carries over between calls. It is anchored at both ends, so
+    // a rule has to cover the whole topic, and an alternation can't stop at a shorter branch.
+    return new RegExp(`^(?:${pattern.source})$`, pattern.flags.replace(/[gy]/g, '')).exec(topic);
   };
   const policy = async (ctx: TopicContext): Promise<Response | void> => {
     for (const { pattern, allow } of rules) {

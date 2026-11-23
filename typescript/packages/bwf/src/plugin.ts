@@ -86,7 +86,7 @@ export function realtime(options: RealtimePluginOptions = {}): Plugin {
         `const console_ = { name: 'console', track: (e) => console.log('[analytics]', JSON.stringify(e)) };`,
         `const ae = analyticsEngine({ binding: ${JSON.stringify(analytics)} });`,
         `export const registry = defineRegistry(found, { analytics: ${logEvents ? 'fanOut(ae, console_)' : 'ae'} });`,
-        `export const app = ${JSON.stringify({ name: pkg.name ?? 'app', version: pkg.version ?? '0.0.0', basePath: options.basePath ?? '/rpc', mcpRoute: options.mcpRoute ?? '/mcp' })};`,
+        `export const app = ${JSON.stringify({ name: pkg.name ?? 'app', version: pkg.version ?? '0.0.0', basePath: (options.basePath ?? '/rpc').replace(/\/+$/, ''), mcpRoute: options.mcpRoute ?? '/mcp' })};`,
       ].join('\n');
     },
     configureServer(server: ViteDevServer) {

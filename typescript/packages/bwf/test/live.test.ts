@@ -209,6 +209,13 @@ describe('topicPolicy', () => {
     expect((await policy(ctx('xmessages:channel:a', 'member-of-a')))?.status).toBe(403);
   });
 
+  it('matches the whole topic when a rule has no anchors and a short branch comes first', async () => {
+    const loose = topicPolicy([{ pattern: /room:(a|ab)/, allow: () => true }]);
+    expect(await loose(ctx('room:ab'))).toBeUndefined();
+    expect((await loose(ctx('room:abc')))?.status).toBe(403);
+    expect((await loose(ctx('xroom:a')))?.status).toBe(403);
+  });
+
   it('says which topics a client could ever subscribe to', () => {
     expect(policy.subscribable('public')).toBe(true);
     expect(policy.subscribable('messages:channel:a')).toBe(true);
