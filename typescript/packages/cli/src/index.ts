@@ -248,7 +248,7 @@ export async function run(io: Io): Promise<number> {
     io.stdout(JSON.stringify(body?.data, null, 2) + '\n');
     return 0;
   }
-  const err = body?.error ?? { code: 'INTERNAL', message: `HTTP ${res.status}` };
+  const err = typeof body?.error === 'object' && body.error !== null && typeof body.error.code === 'string' ? body.error : { code: 'INTERNAL', message: `HTTP ${res.status}` };
   io.stderr(`error ${err.code}: ${err.message}\n`);
   for (const i of err.issues ?? []) io.stderr(`  ${i.path ? `--${kebab(i.path.split('.')[0]!)}` : 'input'}: ${i.message}\n`);
   if (res.status === 401) io.stderr('Set --token or REALTIME_TOKEN to an API token.\n');

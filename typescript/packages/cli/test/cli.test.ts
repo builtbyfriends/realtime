@@ -130,6 +130,14 @@ describe('cli', () => {
     expect(err).toContain("isn't JSON");
   });
 
+  it('prints a plain error when the error body has the wrong shape', async () => {
+    let err = '';
+    const odd: typeof fetch = async (input, init) => (String(input).endsWith('manifest.json') ? f(input, init) : new Response('{"error":"boom"}', { status: 502 }));
+    const code = await run({ argv: ['ping'], env: { REALTIME_URL: 'https://api.test', REALTIME_TOKEN: 'bob' }, fetch: odd, stdout: () => {}, stderr: (s) => (err += s) });
+    expect(code).toBe(1);
+    expect(err).toContain('error INTERNAL: HTTP 502');
+  });
+
   it('fails when --url or --token has no value', async () => {
     const url = await cli('contacts', 'search', '--query', 'x', '--url');
     expect(url).toMatchObject({ code: 2, err: 'realtime: --url needs a value\n' });
