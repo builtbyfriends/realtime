@@ -73,4 +73,24 @@ describe('typed client', () => {
     expect(err).toBeInstanceOf(RpcError);
     expect(err).toMatchObject({ code: 'NOT_FOUND', status: 404 });
   });
+
+  const answering = (res: () => Response) => createClient<typeof registry>('https://api.test', { fetch: (async () => res()) as typeof fetch });
+
+  it('rejects with RpcError INTERNAL when a 200 answer is not JSON', async () => {
+    const err = await answering(() => new Response('<html>', { status: 200 })).call('ping').catch((e) => e);
+    expect(err).toBeInstanceOf(RpcError);
+    expect(err).toMatchObject({ code: 'INTERNAL', status: 200 });
+  });
+
+  it('rejects with RpcError INTERNAL when the body is JSON null', async () => {
+    const err = await answering(() => new Response('null', { status: 200 })).call('ping').catch((e) => e);
+    expect(err).toBeInstanceOf(RpcError);
+    expect(err).toMatchObject({ code: 'INTERNAL', status: 200 });
+  });
+
+  it('gives an error body whose error is not an object the code INTERNAL', async () => {
+    const err = await answering(() => Response.json({ error: 'boom' }, { status: 500 })).call('ping').catch((e) => e);
+    expect(err).toBeInstanceOf(RpcError);
+    expect(err).toMatchObject({ code: 'INTERNAL', status: 500 });
+  });
 });

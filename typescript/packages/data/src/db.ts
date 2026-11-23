@@ -220,6 +220,7 @@ export class Query<S extends Schema, T extends keyof S & string> {
   withIndex(name: string, range?: (q: IndexRange) => IndexRange): Query<S, T> {
     const fields = (this.db.schema[this.table] as TableDef).indexes?.[name];
     if (!fields) throw new Error(`no index "${name}" on "${this.table}"`);
+    if (this.index) throw new Error(`a query walks one index: "${this.index}" is already set, so "${name}" can't be added`);
     const conds: Cond[] = [];
     const q: IndexRange = {
       eq: (f, v) => add(f, '=', v),
@@ -257,7 +258,7 @@ export class Query<S extends Schema, T extends keyof S & string> {
     const dir = this.direction.toUpperCase();
     const fields = this.index ? (this.db.schema[this.table] as TableDef).indexes![this.index]! : [];
     const order = [...fields.map((f) => `${fieldSql(f)} ${dir}`), `_rowid ${dir}`].join(',');
-    const where = this.conds.map((c) => `${fieldSql(c.field)} ${c.op === '=' && c.value === null ? 'IS' : c.op} ?`);
+    const where = this.conds.map((c) => `${fieldSql(c.field)} ${c.op === '=' && (c.value === null || c.value === undefined) ? 'IS' : c.op} ?`);
     const sql = `SELECT * FROM t_${this.table}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY ${order}`;
     for (const row of this.db.storage.sql.exec(sql, ...this.conds.map((c) => bindable(c.value))) as Iterable<Row>) {
       const doc = toDoc(row) as Doc<S[T]>;
@@ -298,6 +299,8 @@ export function syncSchema(storage: DataStorage, schema: Schema): void {
   storage.transactionSync(() => {
     run(storage, `CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     if (run<{ value: string }>(storage, `SELECT value FROM _meta WHERE key='schema'`)[0]?.value === signature) return;
+    distinctNames(schema);
+    dropRemoved(storage, schema);
     for (const [table, def] of Object.entries(schema)) {
       ident(table, 'table');
       run(
@@ -310,7 +313,8 @@ export function syncSchema(storage: DataStorage, schema: Schema): void {
         const idx = `i_${table}_${name}_${hash(fields.join(','))}`;
         wanted.set(idx, `CREATE INDEX IF NOT EXISTS ${idx} ON t_${table} (${[...fields.map(fieldSql), '_rowid'].join(',')})`);
       }
-      const existing = run<{ name: string }>(storage, `SELECT name FROM sqlite_master WHERE type='index' AND name LIKE ? ESCAPE '\\'`, `i\\_${table}\\_%`);
+      // Decision: match on the index's own table. A name pattern for `message` also fits the indexes of `message_reaction`.
+      const existing = run<{ name: string }>(storage, `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND name GLOB 'i_*'`, `t_${table}`);
       for (const { name } of existing) if (!wanted.has(name)) run(storage, `DROP INDEX ${name}`);
       for (const sql of wanted.values()) run(storage, sql);
 
@@ -337,7 +341,8 @@ export function syncSchema(storage: DataStorage, schema: Schema): void {
           for (const row of run<Row>(storage, `SELECT * FROM t_${table}`)) {
             const doc = JSON.parse(row.doc);
             const vector = pick(doc, spec.field);
-            if (!Array.isArray(vector)) continue;
+            // Decision: a stored vector of another length is left out of the index. Refusing it here would stop the object from starting.
+            if (!Array.isArray(vector) || vector.length !== spec.dimensions) continue;
             run(
               storage,
               `INSERT INTO ${vecTable(table, name)} (rowid,v${filters.map((_, i) => `,f_${i}`).join('')}) VALUES (?,?${filters.map(() => ',?').join('')})`,
@@ -357,6 +362,34 @@ export function syncSchema(storage: DataStorage, schema: Schema): void {
 export function schemaSignature(schema: Schema): string {
   const shape = Object.entries(schema).map(([table, def]) => [table, def.indexes ?? {}, def.search ?? {}, def.vectors ?? {}]);
   return `v1:${JSON.stringify(shape)}`;
+}
+
+// Decision: names are joined with `_`, which they may also contain, so table `a` with index `b_c` and table `a_b` with
+// index `c` on the same fields would share one SQLite name. That is refused here, since renaming would rebuild every index already made.
+function distinctNames(schema: Schema): void {
+  const seen = new Map<string, string>();
+  const claim = (sqlName: string, what: string) => {
+    const other = seen.get(sqlName);
+    if (other) throw new Error(`${what} and ${other} would share the name "${sqlName}": rename one of them`);
+    seen.set(sqlName, what);
+  };
+  for (const [table, def] of Object.entries(schema)) {
+    for (const [name, fields] of Object.entries(def.indexes ?? {})) claim(`i_${table}_${name}_${hash(fields.join(','))}`, `index "${name}" on "${table}"`);
+    for (const name of Object.keys(def.search ?? {})) claim(`fts_${table}_${name}`, `search index "${name}" on "${table}"`);
+    for (const name of Object.keys(def.vectors ?? {})) claim(`vec_${table}_${name}`, `vector index "${name}" on "${table}"`);
+  }
+}
+
+// Decision: a search or vector table the schema no longer has is dropped, so one that comes back later is built again from the documents.
+function dropRemoved(storage: DataStorage, schema: Schema): void {
+  for (const { key } of run<{ key: string }>(storage, `SELECT key FROM _meta WHERE key LIKE '%/fts:%' OR key LIKE '%/vec:%'`)) {
+    const [table, rest] = key.split('/') as [string, string];
+    const [kind, name] = rest.split(':') as ['fts' | 'vec', string];
+    const def = schema[table];
+    if (kind === 'fts' ? def?.search?.[name] : def?.vectors?.[name]) continue;
+    run(storage, `DROP TABLE IF EXISTS ${kind === 'fts' ? ftsTable(table, name) : vecTable(table, name)}`);
+    run(storage, `DELETE FROM _meta WHERE key=?`, key);
+  }
 }
 
 function derived(storage: DataStorage, table: string, key: string, signature: string, name: string, build: () => void) {
@@ -398,7 +431,7 @@ function filterSql(declared: readonly string[], eq: Record<string, unknown> | un
   for (const [field, value] of Object.entries(eq ?? {})) {
     const i = declared.indexOf(field);
     if (i < 0) throw new Error(`"${field}" is not a filter of this index (${declared.join(', ') || 'none'})`);
-    where += ` AND ${prefix}${i} ${value === null ? 'IS' : '='} ?`;
+    where += ` AND ${prefix}${i} ${value === null || value === undefined ? 'IS' : '='} ?`;
     params.push(bindable(value));
   }
   return { where, params };

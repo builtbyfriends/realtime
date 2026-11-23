@@ -85,10 +85,16 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
    */
   const topics = new Map<string, { listeners: Set<() => void>; stop: Promise<() => Promise<void>> }>();
 
+  const unsubscribing = new Map<string, Promise<void>>();
+
   function release(topic: string, entry: { listeners: Set<() => void>; stop: Promise<() => Promise<void>> }) {
     if (entry.listeners.size || topics.get(topic) !== entry) return;
     topics.delete(topic);
-    void entry.stop.then((stop) => stop()).catch(() => {});
+    const done = entry.stop.then((stop) => stop()).catch(() => {});
+    unsubscribing.set(topic, done);
+    void done.then(() => {
+      if (unsubscribing.get(topic) === done) unsubscribing.delete(topic);
+    });
   }
 
   return {
@@ -96,13 +102,17 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
       let entry = topics.get(topic);
       if (!entry) {
         const listeners = new Set<() => void>();
-        const stop = open().subscribe({
-          id: topic,
-          topic,
-          onEvent: () => {
-            for (const listener of [...listeners]) listener();
-          },
-        });
+        const subscribe = () =>
+          open().subscribe({
+            id: topic,
+            topic,
+            onEvent: () => {
+              for (const listener of [...listeners]) listener();
+            },
+          });
+        // Decision: a subscribe with a used id replaces it on the server, so wait for the queued unsubscribe of this topic first.
+        const pending = unsubscribing.get(topic);
+        const stop = pending ? pending.then(subscribe) : subscribe();
         entry = { listeners, stop };
         topics.set(topic, entry);
         const failed = entry;

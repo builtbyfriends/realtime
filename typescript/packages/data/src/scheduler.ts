@@ -7,6 +7,7 @@ type Row = { id: string; name: string; args: string; run_at: number; status: 'pe
 export function syncJobs(storage: DataStorage): void {
   run(storage, `CREATE TABLE IF NOT EXISTS _jobs (id TEXT PRIMARY KEY, name TEXT NOT NULL, args TEXT NOT NULL, run_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, error TEXT)`);
   run(storage, `CREATE INDEX IF NOT EXISTS _jobs_due ON _jobs (status, run_at)`);
+  if (!run<{ name: string }>(storage, `SELECT name FROM pragma_table_info('_jobs')`).some((c) => c.name === 'cut_short')) run(storage, `ALTER TABLE _jobs ADD COLUMN cut_short INTEGER NOT NULL DEFAULT 0`);
 }
 
 /**
@@ -40,7 +41,7 @@ export class Scheduler {
     run(
       this.storage,
       `INSERT INTO _jobs (id,name,args,run_at) VALUES (?,?,?,?)
-       ON CONFLICT(id) DO UPDATE SET name=excluded.name, args=excluded.args, run_at=excluded.run_at, status='pending', attempts=0, error=NULL`,
+       ON CONFLICT(id) DO UPDATE SET name=excluded.name, args=excluded.args, run_at=excluded.run_at, status='pending', attempts=0, error=NULL, cut_short=0`,
       id,
       name,
       JSON.stringify(args ?? null),
@@ -72,6 +73,20 @@ export class Scheduler {
     return run<{ at: number | null }>(this.storage, `SELECT MIN(run_at) AS at FROM _jobs WHERE status='pending'`)[0]?.at ?? null;
   }
 
+  /**
+   * @internal Called before the handler runs. Returns how many earlier runs of this job started and never ended, which
+   * is what a run that takes the object down with it looks like. A deploy or an eviction in the middle of a run looks the same.
+   * Null when the job was cancelled or replaced since it was read, so it shouldn't run.
+   */
+  started(job: ScheduledJob): number | null {
+    return run<{ cut_short: number }>(this.storage, `UPDATE _jobs SET cut_short=cut_short+1 WHERE id=? AND run_at=? AND status='pending' RETURNING cut_short`, job.id, job.runAt)[0]?.cut_short ?? null;
+  }
+
+  /** @internal Parks a job whose runs keep being cut short. */
+  park(job: ScheduledJob, error: string): void {
+    run(this.storage, `UPDATE _jobs SET status='failed', error=? WHERE id=? AND run_at=?`, error, job.id, job.runAt);
+  }
+
   /** @internal Called after the handler succeeded. Skips a job that was replaced while it ran. */
   done(job: ScheduledJob): void {
     run(this.storage, `DELETE FROM _jobs WHERE id=? AND run_at=?`, job.id, job.runAt);
@@ -81,7 +96,7 @@ export class Scheduler {
   fail(job: ScheduledJob, error: string, maxAttempts: number, now: number): void {
     const attempts = job.attempts + 1;
     if (attempts >= maxAttempts) run(this.storage, `UPDATE _jobs SET status='failed', attempts=?, error=? WHERE id=? AND run_at=?`, attempts, error, job.id, job.runAt);
-    else run(this.storage, `UPDATE _jobs SET run_at=?, attempts=?, error=? WHERE id=? AND run_at=?`, now + Math.min(2 ** attempts * 1000, 5 * 60_000), attempts, error, job.id, job.runAt);
+    else run(this.storage, `UPDATE _jobs SET run_at=?, attempts=?, error=?, cut_short=0 WHERE id=? AND run_at=?`, now + Math.min(2 ** attempts * 1000, 5 * 60_000), attempts, error, job.id, job.runAt);
   }
 }
 

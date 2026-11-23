@@ -82,6 +82,20 @@ describe('bwfTransport', () => {
     expect(v.count('x')).toBe(1);
   });
 
+  it('keeps the server subscription when a listener leaves and another joins in the same tick', async () => {
+    const v = fakeHost();
+    const t = bwfTransport({ connect: v.connect });
+    const heard = vi.fn();
+    const stop = await t.subscribe('x', () => {});
+    stop();
+    const again = t.subscribe('x', heard);
+    await again;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(v.count('x')).toBe(1);
+    v.publish('x');
+    expect(heard).toHaveBeenCalledTimes(1);
+  });
+
   it('fails the query when bwf refuses the topic, and asks again for the next one', async () => {
     const v = fakeHost();
     let refuse = true;
@@ -156,6 +170,27 @@ describe('fetchEventSource', () => {
     const error = vi.fn();
     source.addEventListener('error', error);
     await vi.waitFor(() => expect(error).toHaveBeenCalledTimes(1));
+    expect(error.mock.calls[0]![0].error).toMatchObject({ status: 401 });
+  });
+
+  it('reports a headers error to a listener added right after the constructor', async () => {
+    const Source = fetchEventSource({ headers: { authorization: 'Bearer a\nb' }, fetch: (async () => sse('')) as any });
+    const error = vi.fn();
+    new Source('/live').addEventListener('error', error);
+    await vi.waitFor(() => expect(error).toHaveBeenCalledTimes(1));
+  });
+
+  it('reports a fetch that throws at once to a listener added right after the constructor', async () => {
+    const Source = fetchEventSource({
+      headers: {},
+      fetch: (() => {
+        throw new TypeError('bad url');
+      }) as any,
+    });
+    const error = vi.fn();
+    new Source('/live').addEventListener('error', error);
+    await vi.waitFor(() => expect(error).toHaveBeenCalledTimes(1));
+    expect(error.mock.calls[0]![0].error).toBeInstanceOf(TypeError);
   });
 });
 
@@ -180,6 +215,18 @@ describe('topicPolicy', () => {
     expect(policy.subscribable('messages')).toBe(false);
     expect(policy.subscribable('messages:9f1c')).toBe(false);
     expect(policy.subscribable('xmessages:channel:a')).toBe(false);
+  });
+
+  it('gives the same answer each time for a pattern with the g or y flag', async () => {
+    const flagged = topicPolicy([
+      { pattern: /^public$/g, allow: () => true },
+      { pattern: /^open$/y, allow: () => true },
+    ]);
+    for (let i = 0; i < 4; i++) {
+      expect(await flagged(ctx('public'))).toBeUndefined();
+      expect(await flagged(ctx('open'))).toBeUndefined();
+      expect(flagged.subscribable('public')).toBe(true);
+    }
   });
 });
 

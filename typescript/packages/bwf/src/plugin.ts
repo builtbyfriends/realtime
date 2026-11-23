@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 export type RealtimePluginOptions = {
   /** Where procedures live. Default "src/procedures" (bwf scans src/ for bindings, so @builtbyfriends/bwf/db etc. just work). */
   dir?: string;
-  /** Analytics Engine binding. Default "ANALYTICS". Pass false only together with an explicit reason in code review. */
+  /** Analytics Engine binding. Default "ANALYTICS". */
   analyticsBinding?: string;
   /** Also print each analytics event to the console during `vite dev`. Default true. */
   logEventsInDev?: boolean;

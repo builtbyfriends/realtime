@@ -29,9 +29,11 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      - uses: oven-sh/setup-bun@v2
       - run: npm install -g npm@11
-      - run: npm ci --no-audit --no-fund
-      - run: npm run check
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run build
       - name: Check the tag matches the package versions
         run: |
           tag="${GITHUB_REF_NAME#v}"

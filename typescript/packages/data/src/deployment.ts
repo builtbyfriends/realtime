@@ -103,6 +103,8 @@ export type DataDefinition<S extends Schema, F extends Record<string, AnyFn>, J 
   laneMs?: number;
 };
 
+const MAX_CUT_SHORT = 10;
+
 /** How the object answers one live query over the socket. */
 export type SyncQueryPlan = { fn: string; args: unknown; output?: StandardSchema };
 type StandardSchema = { '~standard': { validate(value: unknown): unknown } };
@@ -194,10 +196,12 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
             return base ? base.call(this, request) : new Response('not found', { status: 404 });
           }
           if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response('expected a WebSocket', { status: 426 });
+          const who = socketIdentity(header);
+          if (!who) return new Response('bad sync header', { status: 400 });
           // Decision: read WebSocketPair from globalThis, because this package doesn't load the Workers types.
           const Pair = (globalThis as unknown as { WebSocketPair: new () => [unknown, unknown] }).WebSocketPair;
           const [device, object] = new Pair();
-          this.#sockets.accept(object as never, JSON.parse(header) as SocketIdentity);
+          this.#sockets.accept(object as never, who);
           return new Response(null, { status: 101, webSocket: device } as ResponseInit);
         }
         webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
@@ -219,10 +223,20 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
     client(namespace, name = 'main') {
       const stub = (): Stub => namespace.get(namespace.idFromName(name));
       const group = (kind: 'query' | 'mutation') =>
-        new Proxy({}, { get: (_, fn) => (typeof fn === 'string' ? (args?: unknown) => stub().run(kind, fn, args) : undefined) });
+        new Proxy({}, { get: (_, fn) => (typeof fn === 'string' && fn !== 'then' ? (args?: unknown) => stub().run(kind, fn, args) : undefined) });
       return { query: group('query'), mutate: group('mutation'), job: (id: string) => stub().job(id) } as DataClient<F>;
     },
   };
+}
+
+function socketIdentity(header: string): SocketIdentity | null {
+  try {
+    const v = JSON.parse(header) as { actor?: unknown; groups?: unknown } | null;
+    if (!v || typeof v.actor !== 'string' || !Array.isArray(v.groups) || !v.groups.every((g) => typeof g === 'string')) return null;
+    return { actor: v.actor, groups: v.groups };
+  } catch {
+    return null;
+  }
 }
 
 type Resolved = {
@@ -269,7 +283,8 @@ export class Engine {
     return topics.filter((t) => {
       try {
         return check(ctx, actor, t);
-      } catch {
+      } catch (e) {
+        console.error(`syncTopics for "${t}" failed`, e);
         return false;
       }
     });
@@ -280,7 +295,8 @@ export class Engine {
     let plan: SyncQueryPlan | null | undefined;
     try {
       plan = await this.def.syncQuery?.(actor, name, input);
-    } catch {
+    } catch (e) {
+      console.error(`syncQuery for "${name}" failed`, e);
       return null;
     }
     const fn = plan && Object.hasOwn(this.def.functions, plan.fn) ? this.def.functions[plan.fn] : undefined;
@@ -291,7 +307,9 @@ export class Engine {
       const checked = (await plan.output['~standard'].validate(value)) as Validated;
       return checked.issues ? { error: 'invalid output' } : { value: checked.value };
     } catch (e) {
-      return { error: e instanceof Error ? e.message : String(e) };
+      // Decision: the device gets a fixed text, as an HTTP caller gets INTERNAL. The error's own text can name tables and fields.
+      console.error(`live query "${name}" failed`, e);
+      return { error: 'query failed' };
     }
   }
 
@@ -320,8 +338,15 @@ export class Engine {
         out.push(c);
         continue;
       }
-      const doc = ctx.db.get(c.table as never, c.id) as Record<string, unknown> | null;
-      const seen = doc ? view(doc as never, ctx) : null;
+      // Decision: a view that throws for one document leaves that change out for this reader, as if it returned null. Failing
+      // the whole page would stop the reader at that document on each pull.
+      let seen: unknown = null;
+      try {
+        const doc = ctx.db.get(c.table as never, c.id) as Record<string, unknown> | null;
+        seen = doc ? view(doc as never, ctx) : null;
+      } catch (e) {
+        console.error(`sync view of ${c.table} ${c.id} failed`, e);
+      }
       if (seen !== null && seen !== undefined) out.push({ ...c, doc: seen as Record<string, unknown> });
     }
     return out;
@@ -335,7 +360,8 @@ export class Engine {
     return groups.filter((g) => {
       try {
         return check(ctx, actor, g);
-      } catch {
+      } catch (e) {
+        console.error(`syncAccess for "${g}" failed`, e);
         return false;
       }
     });
@@ -353,7 +379,7 @@ export class Engine {
   }
 
   scheduler(): Scheduler {
-    return new Scheduler(this.storage, (name) => name in this.def.jobs);
+    return new Scheduler(this.storage, (name) => Object.hasOwn(this.def.jobs, name));
   }
 
   async run(kind: 'query' | 'mutation', name: string, args: unknown): Promise<unknown> {
@@ -367,6 +393,8 @@ export class Engine {
     let batch: ChangeBatch | null = null;
     const result = this.storage.transactionSync(() => {
       const out = fn.run({ db, scheduler, env: this.env, now: Date.now() }, args);
+      // Decision: a mutation that returns a promise would write after the transaction ended, with no rollback and no word to devices.
+      if (out && typeof (out as { then?: unknown }).then === 'function') throw new Error(`mutation "${name}" returned a promise: mutations are synchronous, so do async work in a job`);
       batch = db.changes.flush(this.storage);
       return out;
     });
@@ -415,14 +443,31 @@ export class Engine {
   }
 
   private async runJob(scheduler: Scheduler, job: ScheduledJob, max: number): Promise<void> {
-    const handler = this.def.jobs[job.name];
+    const handler = Object.hasOwn(this.def.jobs, job.name) ? this.def.jobs[job.name] : undefined;
+    // Decision: what the handler did and writing that down are kept apart, so a job that ran isn't counted as failed
+    // because the note couldn't be written, and a storage error here doesn't end the alarm for the jobs beside it.
+    let failure: { error: unknown } | null = null;
     try {
       if (!handler) throw new Error(`no job named "${job.name}"`);
+      // Decision: a run that never ended took the object down, or a deploy cut it short. After ten of those in a row the
+      // job is parked. A throw is an ending, and counts against `maxJobAttempts` as before.
+      const cutShort = scheduler.started(job);
+      if (cutShort === null) return;
+      if (cutShort > MAX_CUT_SHORT) {
+        console.error(`job ${job.name} (${job.id}) parked: its runs keep stopping before they finish`);
+        scheduler.park(job, 'stopped before it finished, too many times');
+        return;
+      }
       await handler({ env: this.env, id: job.id, attempt: job.attempts + 1, data: this.dataClient() }, job.args);
-      scheduler.done(job);
+    } catch (error) {
+      failure = { error };
+    }
+    try {
+      if (!failure) return scheduler.done(job);
+      console.error(`job ${job.name} (${job.id}) failed`, failure.error);
+      scheduler.fail(job, failure.error instanceof Error ? failure.error.message : String(failure.error), max, Date.now());
     } catch (e) {
-      console.error(`job ${job.name} (${job.id}) failed`, e);
-      scheduler.fail(job, e instanceof Error ? e.message : String(e), max, Date.now());
+      console.error(`job ${job.name} (${job.id}): its result couldn't be saved`, e);
     }
   }
 
@@ -432,12 +477,28 @@ export class Engine {
   }
 
   private dataClient(): DataClient<any> {
-    const call = (kind: 'query' | 'mutation') => new Proxy({}, { get: (_, fn) => (typeof fn === 'string' ? (args?: unknown) => this.run(kind, fn, args) : undefined) });
+    const call = (kind: 'query' | 'mutation') => new Proxy({}, { get: (_, fn) => (typeof fn === 'string' && fn !== 'then' ? (args?: unknown) => this.run(kind, fn, args) : undefined) });
     return { query: call('query'), mutate: call('mutation'), job: async (id: string) => this.scheduler().get(id) } as DataClient<any>;
   }
 
   private async afterCommit(touched: Set<string>, queueChanged: boolean, batch: ChangeBatch | null = null): Promise<void> {
-    if (queueChanged) await this.arm(this.scheduler());
+    // Decision: the write is committed, so devices hear about it even when the alarm can't be set. The caller still gets the error.
+    try {
+      if (queueChanged) await this.arm(this.scheduler());
+    } finally {
+      this.fanOut(touched, batch);
+    }
+  }
+
+  private fanOut(touched: Set<string>, batch: ChangeBatch | null): void {
+    // Decision: access is checked again before the commit goes out, so a reader the commit removed doesn't get what it wrote.
+    if (touched.size && this.rechecks.length) {
+      try {
+        if (this.def.syncRecheck?.([...touched])) for (const fn of this.rechecks) fn();
+      } catch (e) {
+        console.error('sync recheck failed', e);
+      }
+    }
     if (batch) for (const fn of this.listeners) {
       try {
         fn(batch);
@@ -450,13 +511,6 @@ export class Engine {
         fn([...touched]);
       } catch (e) {
         console.error('topic listener failed', e);
-      }
-    }
-    if (touched.size && this.rechecks.length && this.def.syncRecheck?.([...touched])) for (const fn of this.rechecks) {
-      try {
-        fn();
-      } catch (e) {
-        console.error('sync recheck failed', e);
       }
     }
     if (batch && this.def.onChanges) {

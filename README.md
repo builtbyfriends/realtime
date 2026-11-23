@@ -42,8 +42,8 @@ Add the parts you need, such as `@builtbyfriends/realtime-http`, `@builtbyfriend
 
 ```sh
 cd typescript
-npm install
-npm run check
+bun install
+bun run check
 ```
 
 ## Folders

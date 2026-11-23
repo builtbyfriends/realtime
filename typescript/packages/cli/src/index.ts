@@ -26,6 +26,8 @@ function typeOf(p: Prop): string {
 
 class UsageError extends Error {}
 
+const ownFlags = ['url', 'token', 'help'];
+
 const globalOptions: ParseArgsOptionsConfig = {
   url: { type: 'string' },
   token: { type: 'string' },
@@ -95,14 +97,17 @@ function inputFromFlags(entry: ManifestEntry, flags: [string, string | true][]):
   for (const [flag, raw] of flags) {
     if (flag === 'json') {
       if (raw === true) throw new UsageError('--json needs a value');
+      let parsed: unknown;
       try {
-        input = { ...input, ...JSON.parse(raw) };
+        parsed = JSON.parse(raw);
       } catch {
         throw new UsageError('--json must be a JSON object');
       }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new UsageError('--json must be a JSON object');
+      input = { ...input, ...parsed };
       continue;
     }
-    const negated = flag.startsWith('no-') && byFlag.has(flag.slice(3));
+    const negated = !byFlag.has(flag) && flag.startsWith('no-') && byFlag.has(flag.slice(3));
     const key = byFlag.get(negated ? flag.slice(3) : flag);
     if (!key) {
       const known = [...byFlag.keys()].map((f) => `--${f}`).join(', ') || '(none)';
@@ -164,6 +169,12 @@ export async function run(io: Io): Promise<number> {
   // only known once the manifest is in, so they're split again below.
   const { words, flags } = splitArgs(io.argv, globalOptions);
   const take = (name: string) => flags.find(([k]) => k === name)?.[1];
+  for (const name of ['url', 'token']) {
+    if (take(name) === true) {
+      io.stderr(`realtime: --${name} needs a value\n`);
+      return 2;
+    }
+  }
   const url = (take('url') as string | undefined) ?? io.env.REALTIME_URL;
   const token = (take('token') as string | undefined) ?? io.env.REALTIME_TOKEN;
   const basePath = io.env.REALTIME_BASE_PATH ?? '/rpc';
@@ -210,7 +221,13 @@ export async function run(io: Io): Promise<number> {
 
   let input: unknown;
   try {
-    input = inputFromFlags(entry, own.flags.filter(([k]) => !['url', 'token', 'help'].includes(k)));
+    const props = (entry.input as { properties?: Record<string, Prop> } | undefined)?.properties ?? {};
+    const required = (entry.input as { required?: string[] } | undefined)?.required ?? [];
+    const clash = Object.keys(props).find((k) => ownFlags.includes(kebab(k)) && required.includes(k));
+    if (clash && !own.flags.some(([f]) => f === 'json')) {
+      throw new UsageError(`"${clash}" is also a flag of the CLI, so --${kebab(clash)} can't set it. Pass it with --json '{"${clash}": ...}'`);
+    }
+    input = inputFromFlags(entry, own.flags.filter(([k]) => !ownFlags.includes(k)));
   } catch (e) {
     if (!(e instanceof UsageError)) throw e;
     io.stderr(`realtime: ${e.message}\n\n${commandHelp(entry)}`);
@@ -222,12 +239,16 @@ export async function run(io: Io): Promise<number> {
     headers: { 'content-type': 'application/json', 'x-realtime-surface': 'cli', ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: input === undefined ? '' : JSON.stringify(input),
   });
-  const body = (await res.json().catch(() => ({}))) as { data?: unknown; error?: { code: string; message: string; issues?: { path: string; message: string }[] } };
-  if (res.ok && !body.error) {
-    io.stdout(JSON.stringify(body.data, null, 2) + '\n');
+  const body = (await res.json().catch(() => undefined)) as { data?: unknown; error?: { code: string; message: string; issues?: { path: string; message: string }[] } } | undefined;
+  if (res.ok && body === undefined) {
+    io.stderr(`realtime: the server sent a response that isn't JSON (HTTP ${res.status})\n`);
+    return 1;
+  }
+  if (res.ok && !body?.error) {
+    io.stdout(JSON.stringify(body?.data, null, 2) + '\n');
     return 0;
   }
-  const err = body.error ?? { code: 'INTERNAL', message: `HTTP ${res.status}` };
+  const err = body?.error ?? { code: 'INTERNAL', message: `HTTP ${res.status}` };
   io.stderr(`error ${err.code}: ${err.message}\n`);
   for (const i of err.issues ?? []) io.stderr(`  ${i.path ? `--${kebab(i.path.split('.')[0]!)}` : 'input'}: ${i.message}\n`);
   if (res.status === 401) io.stderr('Set --token or REALTIME_TOKEN to an API token.\n');

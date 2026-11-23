@@ -111,7 +111,7 @@ try {
   };
   await tool('needsApproval: false runs right away', { tool: 'contacts_search', input: { orgId: 'o1', query: 'ada' } });
   await tool('needsApproval: true is held until a person approves', { tool: 'contacts_create', input: { orgId: 'o1', name: 'Hedy Lamarr', email: 'hedy@example.com' } });
-  await tool('... and runs once approved', { tool: 'contacts_create', input: { orgId: 'o1', name: 'Hedy Lamarr', email: 'hedy@example.com' }, approved: true });
+  await tool('... and the caller can\'t approve its own call', { tool: 'contacts_create', input: { orgId: 'o1', name: 'Hedy Lamarr', email: 'hedy@example.com' }, approved: true });
   await tool('Agents get the user\'s permissions: grace (org o2) asking about o1', { tool: 'contacts_search', input: { orgId: 'o1', query: 'a' } }, 'demo-grace');
   await tool('contacts.get chose noAiTool, so there is no such tool', { tool: 'contacts_get', input: { orgId: 'o1', id: 'c1' } });
 
