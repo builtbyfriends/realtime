@@ -55,11 +55,12 @@ export function fetchEventSource(options: FetchEventSourceOptions): FetchEventSo
     }
 
     async #run() {
+      await Promise.resolve();
       try {
         const headers = new Headers(typeof options.headers === 'function' ? await options.headers() : options.headers);
         headers.set('accept', 'text/event-stream');
         const response = await (options.fetch ?? fetch)(this.url, { headers, signal: this.#abort.signal, cache: 'no-store' });
-        if (!response.ok || !response.body) throw new Error(`live: stream answered ${response.status}`);
+        if (!response.ok || !response.body) throw Object.assign(new Error(`live: stream answered ${response.status}`), { status: response.status });
         this.#emit('open');
         const reader = response.body
           .pipeThrough(new TextDecoderStream())

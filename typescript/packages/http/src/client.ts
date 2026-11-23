@@ -35,9 +35,15 @@ export function createClient<R extends Registry<any>>(
         headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...options.headers },
         body: input === undefined ? '' : JSON.stringify(input),
       });
-      const body = (await res.json().catch(() => ({}))) as { data?: unknown; error?: { code: string; message: string; issues?: any } };
+      const body = (await res.json().catch(() => undefined)) as
+        | { data?: unknown; error?: { code: string; message: string; issues?: any } }
+        | null
+        | undefined;
+      if (typeof body !== 'object' || body === null) {
+        throw new RpcError<ErrorsOf<Procs<R>[N]>>('INTERNAL', `HTTP ${res.status}: the answer wasn't the expected JSON`, res.status);
+      }
       if (!res.ok || body.error) {
-        const e = body.error ?? { code: 'INTERNAL', message: `HTTP ${res.status}` };
+        const e = typeof body.error === 'object' && body.error !== null ? body.error : { code: 'INTERNAL', message: `HTTP ${res.status}` };
         throw new RpcError<ErrorsOf<Procs<R>[N]>>(e.code as any, e.message, res.status, e.issues);
       }
       return body.data as OutputOf<Procs<R>[N]>;
