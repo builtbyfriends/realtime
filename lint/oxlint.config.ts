@@ -44,8 +44,8 @@ export default defineConfig({
       rules: { 'no-console': 'off' },
     },
     {
-      // Decision: These three report an error to the console when the app gives no handler of its own. The packages have no logger.
-      files: ['**/packages/core/src/registry.ts', '**/packages/live/src/index.ts', '**/packages/data/src/deployment.ts'],
+      // Decision: These files report an error to the console when the app gives no handler of its own. The packages have no logger.
+      files: ['**/packages/core/src/registry.ts', '**/packages/live/src/index.ts', '**/packages/data/src/deployment.ts', '**/packages/data/src/sockets.ts'],
       rules: { 'no-console': 'off' },
     },
   ],

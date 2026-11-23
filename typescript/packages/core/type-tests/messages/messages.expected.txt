@@ -5,4 +5,4 @@ packages/core/type-tests/messages/messages.ts(20,73): error TS2551: Property 'au
 packages/core/type-tests/messages/messages.ts(26,31): error TS2345: Argument of type '"NOPE"' is not assignable to parameter of type '"BUSY"'.
 packages/core/type-tests/messages/messages.ts(28,20): error TS2741: Property 'effect' is missing in type '{ description: string; }' but required in type 'McpSpec'.
 packages/core/type-tests/messages/messages.ts(30,17): error TS2322: Type 'Builder<Next<Init<unknown, "f">, "input", { in: undefined; inRaw: void; }>>' is not assignable to type 'AnyProcedure'.
-  Type 'Builder<Next<Init<unknown, "f">, "input", { in: undefined; inRaw: void; }>>' is missing the following properties from type 'Procedure<any>': '~realtime', name, decisions, profiles
+  Type 'Builder<Next<Init<unknown, "f">, "input", { in: undefined; inRaw: void; }>>' is missing the following properties from type 'Procedure<State>': name, decisions, profiles
