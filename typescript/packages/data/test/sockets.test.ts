@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { defineData, defineSchema, SyncSockets, table } from '../src/index.js';
+import { socketIdentity } from '../src/deployment.js';
 import type { SocketIdentity } from '../src/index.js';
 import { memoryStorage } from './storage.js';
 
@@ -285,6 +286,33 @@ describe('live queries over the socket', () => {
     expect(runs).toEqual([]);
   });
 
+  it('answers a query sent again under its id, ends it by a number id, and ends the old one when the new one is refused', async () => {
+    const { sockets, m, tick } = setup();
+    await m('join', { room: 'x', user: 'ann' });
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: [] });
+    const ask = (topics: Array<string>) => sockets.message(a, JSON.stringify({ type: 'query', id: 7, name: 'pins.list', input: { room: 'x' }, topics }));
+    ask(['pins:room:x']);
+    await tick();
+    ask(['pins:room:x']);
+    await tick();
+    expect(a.sent).toEqual([{ type: 'result', id: '7', value: [] }, { type: 'result', id: '7', value: [] }]);
+    ask(['pins:room:x', 'members']);
+    await tick();
+    expect(a.sent.at(-1)).toEqual({ type: 'result', id: '7', denied: true });
+    const count = a.sent.length;
+    await m('pin', { room: 'x', text: 'one' });
+    await tick();
+    expect(a.sent).toHaveLength(count);
+    ask(['pins:room:x']);
+    await tick();
+    sockets.message(a, JSON.stringify({ type: 'unquery', ids: [7] }));
+    const after = a.sent.length;
+    await m('pin', { room: 'x', text: 'two' });
+    await tick();
+    expect(a.sent).toHaveLength(after);
+  });
+
   it('sends nothing when the answer is the same, and stops after unquery', async () => {
     const { sockets, m, tick } = setup();
     await m('join', { room: 'x', user: 'ann' });
@@ -487,5 +515,25 @@ describe('sockets that go wrong', () => {
     engine.listen((batch) => void seen.push(batch.seq));
     await expect(engine.run('mutation', 'add', { room: 'x', text: 'hi' })).rejects.toThrow('no alarm');
     expect(seen).toEqual([1]);
+  });
+});
+
+describe('sync input checks', () => {
+  it('answers a bad after on pull and watch with an error and does nothing else', () => {
+    const { sockets } = setup();
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: ['room:x'] });
+    for (const after of [-1, 'x', Number.NaN, null]) {
+      sockets.message(a, JSON.stringify({ type: 'pull', after, id: 1 }));
+      sockets.message(a, JSON.stringify({ type: 'watch', groups: ['room:y'], after, id: 2 }));
+    }
+    expect(a.sent.every((m) => m.type === 'error' && m.error === 'bad after')).toBe(true);
+    expect(a.sent).toHaveLength(8);
+  });
+
+  it('refuses an empty actor or one too long for a socket tag', () => {
+    expect(socketIdentity(JSON.stringify({ actor: 'ann', groups: [] }))).toEqual({ actor: 'ann', groups: [] });
+    expect(socketIdentity(JSON.stringify({ actor: '', groups: [] }))).toBeNull();
+    expect(socketIdentity(JSON.stringify({ actor: 'a'.repeat(201), groups: [] }))).toBeNull();
   });
 });

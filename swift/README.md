@@ -38,7 +38,7 @@ for await update in live.updates {
 }
 ```
 
-- The headers closure runs for every request, so it can hand out a fresh token. When the server answers 401, `onUnauthorized` runs and the client tries again after a short wait.
+- The headers closure runs for every request, so it can hand out a fresh token. When the stream answers 401 or 403, `onUnauthorized` runs and the client tries again after a short wait.
 - `subscribe` before `start()` is fine. The client holds the subscriptions and sends them when the stream opens, and again after every reconnect.
 - bwf replays nothing. After `.connected(reconnect: true)`, fetch again whatever the screen shows.
 - `close()` ends the stream for good.

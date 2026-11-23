@@ -152,7 +152,7 @@ export function pull(storage: DataStorage, schema: Schema, groups: ReadonlyArray
   const mine = JSON.stringify(groups);
   const rows = run<{ tbl: string; id: string; grp: string; seq: number; deleted: number }>(
     storage,
-    `SELECT tbl,id,grp,seq,deleted FROM _changes WHERE grp IN (SELECT value FROM json_each(?)) AND seq > ? ${after === 0 ? 'AND deleted = 0' : ''} ORDER BY seq LIMIT ?`,
+    `SELECT tbl,id,grp,seq,deleted FROM _changes WHERE grp IN (SELECT value FROM json_each(?)) AND seq > ? ${after === 0 ? 'AND deleted = 0' : ''} ORDER BY seq, deleted DESC LIMIT ?`,
     mine,
     after,
     limit + 1,
@@ -167,7 +167,7 @@ export function pull(storage: DataStorage, schema: Schema, groups: ReadonlyArray
     const whole = page.filter((r) => r.seq < last);
     page = whole.length
       ? whole
-      : run(storage, `SELECT tbl,id,grp,seq,deleted FROM _changes WHERE grp IN (SELECT value FROM json_each(?)) AND seq = ? ${after === 0 ? 'AND deleted = 0' : ''}`, mine, last);
+      : run(storage, `SELECT tbl,id,grp,seq,deleted FROM _changes WHERE grp IN (SELECT value FROM json_each(?)) AND seq = ? ${after === 0 ? 'AND deleted = 0' : ''} ORDER BY deleted DESC`, mine, last);
   }
   const changes: Array<Change> = page.map((r) => {
     const def = schema[r.tbl];

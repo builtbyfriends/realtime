@@ -26,7 +26,10 @@ type Exchange = {
 };
 
 const MAX = 400;
-const SECRET_HEADERS = /^(authorization|x-api-key|cookie|set-cookie|proxy-authorization)$/i;
+const MAX_BODY = 20_000;
+const MAX_EVENTS = 200;
+const SECRET_HEADERS = /^(cookie|set-cookie|authorization|proxy-authorization)$|api-?key|secret|password|(^|-)token$/i;
+const SECRET_PARAMS = /^(token|access_token|id_token|refresh_token|key|api_?key|secret|client_secret|password|signature|sig|code)$/i;
 // Decision: the dev server or the HTTP client adds these to each request, so they only add noise.
 const NOISE_HEADERS = /^(cf-|x-forwarded-|sec-|accept-encoding$|accept-language$|connection$|host$|content-length$)/i;
 
@@ -80,6 +83,7 @@ function parseBody(text: string, contentType: string | null): Body {
     const events: Array<Body> = [];
     const parser = createParser({
       onEvent: ({ data }) => {
+        if (events.length >= MAX_EVENTS) {return;}
         try {
           events.push(parseJson(data));
         } catch {
@@ -91,12 +95,16 @@ function parseBody(text: string, contentType: string | null): Body {
     parser.feed(`${text}\n\n`);
     return { sse: events };
   }
+  const cut = `${text.slice(0, MAX_BODY)}… (${text.length} chars)`;
+  if (text.length > MAX_BODY * 10) {return cut;}
   try {
     return parseJson(text);
   } catch {
-    return text.length > 20_000 ? `${text.slice(0, 20_000)}… (${text.length} chars)` : text;
+    return text.length > MAX_BODY ? cut : text;
   }
 }
+
+const shownUrl = (raw: string) => raw.replaceAll(/([?&])([^=&#]+)=([^&#]*)/g, (all, sep: string, name: string, value: string) => (SECRET_PARAMS.test(name) ? `${sep}${name}=${show(value)}` : all));
 
 export function createDevtools(registry: Registry, app: { name: string; basePath: string; mcpRoute: string }) {
   const route = '/__realtime';
@@ -143,7 +151,7 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
       at: Date.now(),
       kind: llm ? 'llm' : 'outbound',
       method: request.method,
-      url: request.url,
+      url: shownUrl(request.url),
       path: `${url.host}${url.pathname}`,
       reqHeaders: headers(request.headers),
       reqBody: parseBody(await request.clone().text().catch(() => ''), request.headers.get('content-type')),
@@ -214,7 +222,7 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
         at: Date.now(),
         kind,
         method: request.method,
-        url: request.url,
+        url: shownUrl(request.url),
         path: url.pathname,
         reqHeaders: headers(request.headers),
         reqBody: parseBody(reqText, request.headers.get('content-type')),

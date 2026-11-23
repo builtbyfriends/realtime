@@ -26,11 +26,9 @@ export function publishTopics(live: Publisher, options: { only?: (topic: string)
 }
 
 export type TopicContext = { topic: string; user: unknown; owner: string | null; env: BwfEnv; request: Request };
-// Decision: a fresh copy without g or y, so lastIndex never carries over between calls.
-const matches = (pattern: RegExp, topic: string) => {
-  const m = new RegExp(pattern.source, pattern.flags.replaceAll(/[gy]/g, '')).exec(topic);
-  return m && m[0] === topic ? m : null;
-};
+// Decision: a fresh copy without g, y or m, so lastIndex never carries over between calls and a line break can't stand in for an end. It is anchored at both ends, so
+// a rule has to cover the whole topic, and an alternation can't stop at a shorter branch.
+const matches = (pattern: RegExp, topic: string) => new RegExp(`^(?:${pattern.source})$`, pattern.flags.replaceAll(/[gym]/g, '')).exec(topic);
 
 export type TopicRule = {
   /** Matched against the whole topic. Capture groups are passed to `allow`. */

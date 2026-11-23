@@ -52,6 +52,12 @@ describe('mcp', () => {
     expect(JSON.parse((forbidden.content as any)[0].text).error.code).toBe('FORBIDDEN');
     const missing = await bob.callTool({ name: 'contacts_get', arguments: { orgId: 'o1', id: 'missing' } });
     expect(JSON.parse((missing.content as any)[0].text).error).toEqual({ code: 'NOT_FOUND', message: 'No such contact' });
+    const alice = await connect('alice');
+    const extra = await alice.callTool({ name: 'cache_purge', arguments: { surprise: 1 } });
+    expect(extra.isError).toBe(true);
+    expect(JSON.parse((extra.content as any)[0].text).error.code).toBe('INVALID_INPUT');
+    expect((await alice.callTool({ name: 'cache_purge', arguments: {} })).isError).toBeFalsy();
+    expect((await alice.callTool({ name: 'cache_purge' })).isError).toBeFalsy();
     expect(analytics.events.filter((e) => e.surface === 'mcp').map((e) => e.status)).toEqual([200, 404]);
   });
 });

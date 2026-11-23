@@ -401,7 +401,8 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
     } else {step('authz', 'pass', d.authz.reason);}
 
     const started = Date.now();
-    let result: CallResult;
+    let result: CallResult = builtinFailure('INTERNAL');
+    let handled: { value: unknown } | undefined;
     try {
       const value = await handler({
         input,
@@ -415,17 +416,7 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
         },
       });
       step('handler', 'pass', 'returned');
-      // Decision: output is validated before it leaves, so clients and tools can trust its shape.
-      const out = await validate(d.output.schema, value);
-      if (out.ok) {
-        result = { ok: true, status: 200, value: out.value };
-        step('output', 'pass', 'matched the schema');
-        step('errors', 'pass', d.errors.kind === 'none' ? d.errors.reason : 'none raised');
-      } else {
-        onError(new Error(`output did not match the schema: ${JSON.stringify(out.issues)}`), info('output'));
-        result = builtinFailure('INTERNAL');
-        step('output', 'fail', `did not match the schema, so callers get 500 INTERNAL: ${out.issues.map((i) => i.message).join('; ')}`);
-      }
+      handled = { value };
     } catch (error) {
       const spec = error instanceof ProcedureError && Object.hasOwn(proc.errors, error.code) ? proc.errors[error.code] : undefined;
       if (error instanceof ProcedureError && spec) {
@@ -442,6 +433,25 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
         result = builtinFailure('INTERNAL');
         const why = error instanceof ProcedureError ? `fail('${error.code}') is not declared` : `threw ${errorMessage(error)}`;
         step('handler', 'fail', `${why}: 500 INTERNAL`);
+      }
+    }
+    if (handled) {
+      // Decision: output is validated before it leaves, so clients and tools can trust its shape.
+      try {
+        const out = await validate(d.output.schema, handled.value);
+        if (out.ok) {
+          result = { ok: true, status: 200, value: out.value };
+          step('output', 'pass', 'matched the schema');
+          step('errors', 'pass', d.errors.kind === 'none' ? d.errors.reason : 'none raised');
+        } else {
+          onError(new Error(`output did not match the schema: ${JSON.stringify(out.issues)}`), info('output'));
+          result = builtinFailure('INTERNAL');
+          step('output', 'fail', `did not match the schema, so callers get 500 INTERNAL: ${out.issues.map((i) => i.message).join('; ')}`);
+        }
+      } catch (error) {
+        onError(error, info('output'));
+        result = builtinFailure('INTERNAL');
+        step('output', 'fail', `the output schema threw ${errorMessage(error)}: 500 INTERNAL`);
       }
     }
 

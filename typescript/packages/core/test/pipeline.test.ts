@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { defineRegistry } from '@builtbyfriends/realtime';
 import { memoryAnalytics } from '@builtbyfriends/realtime-analytics';
-import { env, getContact, ping, purge, req } from './fixtures.js';
+import { env, getContact, ping, procedure, purge, req } from './fixtures.js';
 
 function setup() {
   const analytics = memoryAnalytics();
@@ -57,6 +57,32 @@ describe('pipeline', () => {
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'database exploded' }), expect.objectContaining({ stage: 'handler' }));
     expect(await call('contacts.get', { orgId: 'o1', id: 'badshape' }, 'bob')).toMatchObject({ status: 500 });
     expect(onError).toHaveBeenLastCalledWith(expect.any(Error), expect.objectContaining({ stage: 'output' }));
+  });
+
+  it('reports an output schema that throws as stage output, with one handler row', async () => {
+    const throwing = { '~standard': { version: 1, vendor: 'test', validate: () => { throw new Error('output schema broke'); } } } as any;
+    const p = procedure('things.out')
+      .noAuth({ reason: 'A test procedure' })
+      .noAuthz({ reason: 'A test procedure' })
+      .noInput()
+      .output(throwing)
+      .noErrors({ reason: 'A test procedure' })
+      .noAnalytics({ reason: 'A test procedure' })
+      .noMcp({ reason: 'A test procedure' })
+      .noCli({ reason: 'A test procedure' })
+      .noAiTool({ reason: 'A test procedure' })
+      .handler(() => ({}));
+    const onError = vi.fn();
+    const registry = defineRegistry([p], { onError });
+    const events: Array<any> = [];
+    registry.trace.subscribe((e) => events.push(e));
+    const r = await registry.call('things.out', undefined, { request: req(), env, surface: 'http', waitUntil: () => {} });
+    expect(r).toMatchObject({ ok: false, status: 500, code: 'INTERNAL' });
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'output schema broke' }), expect.objectContaining({ stage: 'output' }));
+    const steps = events.at(-1).steps;
+    expect(steps.filter((x: any) => x.concern === 'handler')).toHaveLength(1);
+    expect(steps.find((x: any) => x.concern === 'output').status).toBe('fail');
   });
 
   it('rejects a payload sent to a procedure that takes no input', async () => {

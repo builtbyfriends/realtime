@@ -22,6 +22,10 @@ type JsonValue = string | number | boolean | null | Array<JsonValue> | { [key: s
 type InputObject = { [key: string]: JsonValue };
 type Failure = { code: string; message: string; issues?: Array<{ path: string; message: string }> };
 
+// Decision: text from the server is printed without control characters, so a response can't drive the terminal.
+// oxlint-disable-next-line no-control-regex -- the pattern exists to match control characters
+const plain = (s: unknown) => String(s).replaceAll(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, '');
+
 function isJsonValue(value: unknown): value is JsonValue {
   if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {return true;}
   if (Array.isArray(value)) {return value.every((item: unknown) => isJsonValue(item));}
@@ -52,16 +56,23 @@ function toProp(value: unknown): Prop {
     else if (Array.isArray(value.type)) {prop.type = value.type.filter((t: unknown): t is string => typeof t === 'string');}
   }
   if ('description' in value && typeof value.description === 'string') {prop.description = value.description;}
-  if ('enum' in value && Array.isArray(value.enum)) {prop.enum = value.enum;}
+  if ('enum' in value && value.enum !== undefined) {
+    if (!Array.isArray(value.enum)) {throw new ShapeError();}
+    prop.enum = value.enum;
+  }
   if ('items' in value) {prop.items = toProp(value.items);}
-  if ('anyOf' in value && Array.isArray(value.anyOf)) {prop.anyOf = value.anyOf.map((item: unknown) => toProp(item));}
+  if ('anyOf' in value && value.anyOf !== undefined) {
+    if (!Array.isArray(value.anyOf)) {throw new ShapeError();}
+    prop.anyOf = value.anyOf.map((item: unknown) => toProp(item));
+  }
   return prop;
 }
 
 function toShape(input: unknown): Shape | null {
   if (typeof input !== 'object' || input === null) {return null;}
   const shape: Shape = { properties: new Map(), required: [] };
-  if ('properties' in input && typeof input.properties === 'object' && input.properties !== null) {
+  if ('properties' in input && input.properties !== undefined) {
+    if (typeof input.properties !== 'object' || input.properties === null) {throw new ShapeError();}
     for (const entry of Object.entries(input.properties)) {
       const value: unknown = entry[1];
       shape.properties.set(entry[0], toProp(value));
@@ -77,7 +88,8 @@ function toShape(input: unknown): Shape | null {
 
 function toErrors(raw: unknown): CliProcedure['errors'] {
   const errors: CliProcedure['errors'] = [];
-  if (typeof raw !== 'object' || raw === null) {return errors;}
+  if (raw === undefined) {return errors;}
+  if (typeof raw !== 'object' || raw === null) {throw new ShapeError();}
   for (const entry of Object.entries(raw)) {
     const spec: unknown = entry[1];
     if (typeof spec === 'object' && spec !== null && 'status' in spec && 'message' in spec && typeof spec.status === 'number' && typeof spec.message === 'string') {
@@ -88,17 +100,17 @@ function toErrors(raw: unknown): CliProcedure['errors'] {
 }
 
 function toProcedure(raw: unknown): Array<CliProcedure> {
-  if (typeof raw !== 'object' || raw === null || !('path' in raw) || !('cli' in raw) || typeof raw.path !== 'string') {return [];}
+  if (typeof raw !== 'object' || raw === null || !('path' in raw) || !('cli' in raw) || typeof raw.path !== 'string') {throw new ShapeError();}
   const cli = raw.cli;
-  if (typeof cli !== 'object' || cli === null || !('command' in cli) || !('description' in cli)) {return [];}
-  if (typeof cli.command !== 'string' || typeof cli.description !== 'string') {return [];}
+  if (typeof cli !== 'object' || cli === null || !('command' in cli) || !('description' in cli)) {throw new ShapeError();}
+  if (typeof cli.command !== 'string' || typeof cli.description !== 'string') {throw new ShapeError();}
   const input: unknown = 'input' in raw ? raw.input : undefined;
   const errors: unknown = 'errors' in raw ? raw.errors : undefined;
   return [{ path: raw.path, command: cli.command, description: cli.description, input: toShape(input), errors: toErrors(errors) }];
 }
 
 function toManifest(body: unknown): Array<CliProcedure> {
-  if (typeof body !== 'object' || body === null || !('procedures' in body) || !Array.isArray(body.procedures)) {throw new Error('not a manifest');}
+  if (typeof body !== 'object' || body === null || !('procedures' in body) || !Array.isArray(body.procedures)) {throw new ShapeError();}
   return body.procedures.flatMap((raw: unknown) => toProcedure(raw));
 }
 
@@ -134,6 +146,7 @@ function typeOf(p: Prop): string {
 }
 
 class UsageError extends Error {}
+class ShapeError extends Error {}
 
 const ownFlags = new Set(['url', 'token', 'help']);
 
@@ -185,7 +198,7 @@ function coerce(name: string, prop: Prop, raw: string | true): JsonValue {
   }
   if (raw === true) {throw new UsageError(`--${name} needs a value`);}
   if (t === 'number' || t === 'integer') {
-    const n = Number(raw);
+    const n = raw.trim() === '' ? Number.NaN : Number(raw);
     if (!Number.isFinite(n) || (t === 'integer' && !Number.isInteger(n))) {throw new UsageError(`--${name} must be ${t === 'integer' ? 'an integer' : 'a number'}`);}
     return n;
   }
@@ -218,7 +231,8 @@ function inputFromFlags(entry: CliProcedure, flags: Array<[string, string | true
     const prop = props.get(key) ?? {};
     if (negated) {
       if (typeOf(prop) !== 'boolean') {throw new UsageError(`--${flag} only works for true/false flags`);}
-      input[key] = false;
+      if (raw !== true && raw !== 'true' && raw !== 'false') {throw new UsageError(`--${flag} takes true or false`);}
+      input[key] = raw === 'false';
       continue;
     }
     const value = coerce(flag, prop, raw);
@@ -242,6 +256,8 @@ function commandHelp(entry: CliProcedure): string {
     lines.push(`  --${kebab(k)} <${t}>${req}${p.description ? `  ${p.description}` : ''}`);
   }
   lines.push('  --json <object>  pass the whole input as JSON');
+  const shadowed = props.flatMap(([k]) => ([...ownFlags, 'json'].includes(kebab(k)) ? [k] : []));
+  if (shadowed.length) {lines.push('', `${shadowed.join(', ')} can't be set with a flag because the CLI uses that flag itself. Pass it through --json '{"${shadowed[0]}": ...}'.`);}
   if (entry.errors.length) {lines.push('', 'Errors:', ...entry.errors.map((e) => `  ${e.code} (${e.status}) ${e.message}`));}
   return lines.join('\n') + '\n';
 }
@@ -298,6 +314,10 @@ export async function run(io: Io): Promise<number> {
     const body: unknown = await res.json();
     procedures = toManifest(body);
   } catch (error) {
+    if (error instanceof ShapeError) {
+      io.stderr(`realtime: the server's manifest isn't in the expected shape\n`);
+      return 1;
+    }
     io.stderr(`realtime: could not load ${origin}${basePath}/manifest.json: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
@@ -337,8 +357,15 @@ export async function run(io: Io): Promise<number> {
     return 2;
   }
 
+  // Decision: the path comes from the server's manifest, and the token goes with the request, so the request stays on the
+  // host the user named.
+  const target = new URL(entry.path, `${origin}/`);
+  if (!entry.path.startsWith('/') || target.origin !== new URL(origin).origin) {
+    io.stderr(`realtime: the server listed a path on another host for this command, so nothing was sent\n`);
+    return 1;
+  }
   const authorization = token ? { authorization: `Bearer ${token}` } : undefined;
-  const res = await f(`${origin}${entry.path}`, {
+  const res = await f(target.toString(), {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-realtime-surface': 'cli', ...authorization },
     body: input === undefined ? '' : JSON.stringify(input),
@@ -351,12 +378,12 @@ export async function run(io: Io): Promise<number> {
   const failure = toFailure(body);
   if (res.ok && !failure) {
     const data: unknown = typeof body === 'object' && body !== null && 'data' in body ? body.data : undefined;
-    io.stdout(JSON.stringify(data, null, 2) + '\n');
+    io.stdout(JSON.stringify(data ?? null, null, 2) + '\n');
     return 0;
   }
   const err = failure ?? { code: 'INTERNAL', message: `HTTP ${res.status}` };
-  io.stderr(`error ${err.code}: ${err.message}\n`);
-  for (const i of failure?.issues ?? []) {io.stderr(`  ${i.path ? `--${kebab(i.path.split('.')[0] ?? '')}` : 'input'}: ${i.message}\n`);}
+  io.stderr(`error ${plain(err.code)}: ${plain(err.message)}\n`);
+  for (const i of failure?.issues ?? []) {io.stderr(`  ${i.path ? `--${kebab(plain(i.path).split('.')[0] ?? '')}` : 'input'}: ${plain(i.message)}\n`);}
   if (res.status === 401) {io.stderr('Set --token or REALTIME_TOKEN to an API token.\n');}
   return 1;
 }

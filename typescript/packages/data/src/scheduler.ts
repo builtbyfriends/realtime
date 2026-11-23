@@ -22,11 +22,22 @@ export class Scheduler {
   /** @internal True once this call changed the queue, so the alarm needs re-arming. */
   changed = false;
 
+  private ended = false;
+
   /** @internal */
   constructor(
     private readonly storage: DataStorage,
     private readonly knows: (name: string) => boolean,
   ) {}
+
+  /** @internal Called when the mutation's transaction is over. A job scheduled after that would land outside it, so it throws. */
+  end(): void {
+    this.ended = true;
+  }
+
+  private open(): void {
+    if (this.ended) {throw new Error('this mutation has ended: a job scheduled after an await would land outside its transaction');}
+  }
 
   /**
    * Runs job `name` after `ms`. A given `id` replaces the pending job with that id
@@ -37,7 +48,10 @@ export class Scheduler {
   }
 
   runAt(at: number | Date, name: string, args: unknown = null, options: { id?: string } = {}): string {
+    this.open();
     if (!this.knows(name)) {throw new Error(`no job named "${name}"`);}
+    const when = Number(at);
+    if (!Number.isFinite(when)) {throw new Error('a job needs a time that is a finite number');}
     const id = options.id ?? crypto.randomUUID();
     run(
       this.storage,
@@ -46,7 +60,7 @@ export class Scheduler {
       id,
       name,
       JSON.stringify(args ?? null),
-      Number(at),
+      when,
     );
     this.changed = true;
     return id;
@@ -54,6 +68,7 @@ export class Scheduler {
 
   /** Cancels a job that has not run yet. Returns whether there was one. */
   cancel(id: string): boolean {
+    this.open();
     const gone = run(this.storage, `DELETE FROM _jobs WHERE id=? RETURNING id`, id).length > 0;
     if (gone) {this.changed = true;}
     return gone;

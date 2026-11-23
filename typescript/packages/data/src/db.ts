@@ -20,6 +20,8 @@ export interface IndexRange {
   lte(field: string, value: unknown): IndexRange;
 }
 
+const limitOf = (asked: number | undefined, fallback: number) => (typeof asked === 'number' && Number.isFinite(asked) && asked >= 0 ? Math.floor(asked) : fallback);
+
 /** Reads. A query function gets this; a mutation gets `Db`, which adds writes. */
 export class DbReader<S extends Schema> {
   /** @internal */
@@ -37,6 +39,7 @@ export class DbReader<S extends Schema> {
 
   get<T extends keyof S & string>(table: T, id: string): Doc<S[T]> | null {
     ident(table, 'table');
+    this.def(table);
     const row = run<Row>(this.storage, `SELECT * FROM t_${table} WHERE _id=?`, id)[0];
     return row ? toDoc<S, T>(row) : null;
   }
@@ -67,7 +70,7 @@ export class DbReader<S extends Schema> {
        WHERE ${ftsTable(table, index)} MATCH ? ${where} ORDER BY bm25(${ftsTable(table, index)}) LIMIT ?`,
       match,
       ...params,
-      options.limit ?? 20,
+      limitOf(options.limit, 20),
     );
     return rows.map((row) => toDoc<S, T>(row));
   }
@@ -87,7 +90,7 @@ export class DbReader<S extends Schema> {
     const scored = rows
       .map((r) => ({ rowid: r.rowid, score: cosine(vector, toFloats(r.v)) }))
       .sort((a, b) => b.score - a.score)
-      .slice(0, options.limit ?? 10);
+      .slice(0, limitOf(options.limit, 10));
     return scored.flatMap(({ rowid, score }) => {
       const row = run<Row>(this.storage, `SELECT * FROM t_${table} WHERE _rowid=?`, rowid)[0];
       return row ? [{ doc: toDoc<S, T>(row), score }] : [];
@@ -128,6 +131,7 @@ export class Db<S extends Schema> extends DbReader<S> {
     this.open();
     const def = this.def(table);
     const doc = checked(def, value);
+    this.checkVectors(def, doc);
     const id = crypto.randomUUID();
     const creationTime = Date.now();
     run(this.storage, `INSERT INTO t_${table} (_id,_creationTime,doc) VALUES (?,?,?)`, id, creationTime, JSON.stringify(doc));
@@ -175,6 +179,7 @@ export class Db<S extends Schema> extends DbReader<S> {
 
   private write(table: string, def: TableDef, row: Row, old: JsonObject, next: JsonObject) {
     this.open();
+    this.checkVectors(def, next);
     run(this.storage, `UPDATE t_${table} SET doc=? WHERE _rowid=?`, JSON.stringify(next), row._rowid);
     this.unindex(table, def, row._rowid);
     this.reindex(table, def, row._rowid, next);
@@ -187,6 +192,16 @@ export class Db<S extends Schema> extends DbReader<S> {
     this.touched.add(table);
     this.touched.add(`${table}:${id}`);
     for (const topic of def.topics?.(doc) ?? []) {this.touched.add(topic);}
+  }
+
+  // Decision: a vector of the wrong length is refused before the row is written. A mutation that caught the error later
+  // would otherwise commit a row with no index entry and no change for devices.
+  private checkVectors(def: TableDef, doc: JsonObject) {
+    for (const spec of Object.values(def.vectors ?? {})) {
+      const vector = pick(doc, spec.field);
+      if (vector === undefined || vector === null) {continue;}
+      if (!isJsonArray(vector) || vector.length !== spec.dimensions) {throw new Error(`"${spec.field}" must be a number[${spec.dimensions}]`);}
+    }
   }
 
   private reindex(table: string, def: TableDef, rowid: number, doc: JsonObject) {
@@ -202,8 +217,7 @@ export class Db<S extends Schema> extends DbReader<S> {
     }
     for (const [name, spec] of Object.entries(def.vectors ?? {})) {
       const vector = pick(doc, spec.field);
-      if (vector === undefined || vector === null) {continue;}
-      if (!isJsonArray(vector) || vector.length !== spec.dimensions) {throw new Error(`"${spec.field}" must be a number[${spec.dimensions}]`);}
+      if (vector === undefined || vector === null || !isJsonArray(vector)) {continue;}
       const filters = spec.filters ?? [];
       run(
         this.storage,

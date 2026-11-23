@@ -51,7 +51,7 @@ public actor LiveClient {
   /// - Parameters:
   ///   - url: The route that exports `live.connect` and `live.control`, for example `https://app.example.com/live`.
   ///   - headers: Called for every request, so it can return a fresh token each time.
-  ///   - onUnauthorized: Called when the server answers 401, before the client tries again. Refresh the token here.
+  ///   - onUnauthorized: Called when the server answers 401 or 403 on the stream, before the client tries again. Refresh the token here.
   ///   - session: Defaults to a session whose idle timeout is 60 seconds. The server sends a keep-alive every 15.
   public init(
     url: URL,
@@ -117,7 +117,7 @@ public actor LiveClient {
     var attempt = 0
     while !Task.isCancelled {
       do {
-        try await listen(onOpen: { attempt = 0 })
+        try await listen(onAlive: { attempt = 0 })
       } catch is CancellationError {
         break
       } catch {}
@@ -130,27 +130,30 @@ public actor LiveClient {
     }
   }
 
-  private func listen(onOpen: () -> Void) async throws {
+  private func listen(onAlive: () -> Void) async throws {
     var request = URLRequest(url: streamURL())
     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
     try await applyHeaders(to: &request)
     let (bytes, response) = try await session.bytes(for: request)
     let status = try Self.status(of: response)
-    if status == 401 { await onUnauthorized?(); throw LiveError.unauthorized }
+    if status == 401 || status == 403 { await onUnauthorized?(); throw LiveError.unauthorized }
     guard status == 200 else { throw LiveError.status(status) }
 
     let reconnect = hasOpened
     hasOpened = true
     isConnected = true
     try await restoreSubscriptions()
-    onOpen()
     continuation.yield(.connected(reconnect: reconnect))
 
     // Decision: `AsyncBytes.lines` drops blank lines, and a blank line is what ends a frame, so split by hand.
     var parser = SSEParser()
     var line = Data()
+    var alive = false
     for try await byte in bytes {
       guard byte == 10 else { line.append(byte); continue }
+      // Decision: the wait between attempts starts over once the stream sends a line. A server that answers 200 and then
+      // drops the stream would otherwise be tried again each second.
+      if !alive { alive = true; onAlive() }
       if line.last == 13 { line.removeLast() }
       let text = String(decoding: line, as: UTF8.self)
       line.removeAll(keepingCapacity: true)

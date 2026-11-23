@@ -171,14 +171,26 @@ function isSocketPair(value: unknown): value is SocketPair {
   return typeof value === 'function';
 }
 
+/** @internal */
+export function socketIdentity(header: string): SocketIdentity | null {
+  try {
+    const v: unknown = JSON.parse(header);
+    const actor = isJsonObject(v) ? v.actor : undefined;
+    const groups = isJsonObject(v) ? v.groups : undefined;
+    if (typeof actor !== 'string' || !isJsonArray(groups)) {return null;}
+    const names = groups.filter((g) => typeof g === 'string');
+    if (names.length !== groups.length) {return null;}
+    if (actor.length === 0 || actor.length > 200) {return null;}
+    return { actor, groups: names };
+  } catch {
+    return null;
+  }
+}
+
 function parseIdentity(header: string): SocketIdentity {
-  const value: unknown = JSON.parse(header);
-  const actor = isJsonObject(value) ? value.actor : undefined;
-  const groups = isJsonObject(value) ? value.groups : undefined;
-  if (typeof actor !== 'string' || !isJsonArray(groups)) {throw new Error(`the ${SYNC_HEADER} header must be { actor, groups }`);}
-  const names = groups.filter((g) => typeof g === 'string');
-  if (names.length !== groups.length) {throw new Error(`the ${SYNC_HEADER} header must be { actor, groups }`);}
-  return { actor, groups: names };
+  const who = socketIdentity(header);
+  if (!who) {throw new Error(`the ${SYNC_HEADER} header must be { actor, groups }`);}
+  return who;
 }
 
 function makeClient<F>(call: DataObject['run'], job: (id: string) => Promise<ScheduledJob | null>): DataClient<F> {
@@ -328,7 +340,7 @@ export class Engine {
     const ctx = this.reader();
     return topics.filter((t) => {
       try {
-        return check(ctx, actor, t);
+        return check(ctx, actor, t) === true;
       } catch (error) {
         console.error(`syncTopics for "${t}" failed`, error);
         return false;
@@ -405,7 +417,7 @@ export class Engine {
     const ctx = this.reader();
     return groups.filter((g) => {
       try {
-        return check(ctx, actor, g);
+        return check(ctx, actor, g) === true;
       } catch (error) {
         console.error(`syncAccess for "${g}" failed`, error);
         return false;
@@ -453,6 +465,7 @@ export class Engine {
       });
     } finally {
       db.end();
+      scheduler.end();
     }
     await this.afterCommit(db.touched, scheduler.changed, batch);
     return result;
@@ -545,19 +558,19 @@ export class Engine {
   }
 
   private async afterCommit(touched: Set<string>, queueChanged: boolean, batch: ChangeBatch | null = null): Promise<void> {
-    // Decision: the write is committed, so devices hear about it even when the alarm can't be set. The caller still gets the error.
-    try {
-      if (queueChanged) {await this.arm(this.scheduler());}
-    } finally {
-      this.fanOut(touched, batch);
-    }
+    // Decision: devices hear about the commit before the alarm is set. Setting it waits, and a commit that came in during the
+    // wait would go out first. It also means devices hear when the alarm can't be set, and the caller still gets the error.
+    this.fanOut(touched, batch);
+    if (queueChanged) {await this.arm(this.scheduler());}
   }
 
   private fanOut(touched: Set<string>, batch: ChangeBatch | null): void {
     // Decision: access is checked again before the commit goes out, so a reader the commit removed doesn't get what it wrote.
     if (touched.size && this.rechecks.length) {
       try {
-        if (this.def.syncRecheck?.([...touched])) {
+        // Decision: only a plain false skips the check. A hook that returns a promise or nothing would otherwise skip it for good.
+        const hook = this.def.syncRecheck;
+        if (hook && hook([...touched]) !== false) {
           for (const fn of this.rechecks) {fn();}
         }
       } catch (error) {

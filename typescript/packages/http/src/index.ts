@@ -22,7 +22,7 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 
 /** Turns a call result into the wire format: `{ data }` on success, `{ error: { code, message, issues? } }` otherwise. */
 export function toResponse(result: CallResult): Response {
-  if (result.ok) {return json({ data: result.value });}
+  if (result.ok) {return json({ data: result.value ?? null });}
   const { code, message, issues, status } = result;
   const error: ErrorPayload = { code, message };
   if (issues) {error.issues = issues;}
@@ -45,7 +45,7 @@ export function rpcHandler(registry: Registry, options: RpcHandlerOptions = {}):
 
   const handler = async (request: Request, env: unknown, ctx: ExecutionContextLike) => {
     const path = new URL(request.url).pathname;
-    if (!matches(request)) {return json({ error: { code: 'NOT_FOUND_PROCEDURE', message: 'Not found' } }, 404);}
+    if (!matches(request)) {return toResponse({ ok: false, status: 404, code: 'NOT_FOUND_PROCEDURE', message: BUILTIN_ERRORS.NOT_FOUND_PROCEDURE.message });}
     const rest = path.slice(base.length + 1);
 
     if (request.method === 'GET' && rest === 'manifest.json' && manifest) {return new Response(manifest, { headers: { 'content-type': 'application/json' } });}

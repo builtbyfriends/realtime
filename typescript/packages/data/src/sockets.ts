@@ -16,6 +16,7 @@ import { isJsonObject } from './storage.js';
  *   object → device  {"type":"pull","id":1,"seq":40,"changes":[...],"more":false}
  *   device → object  {"type":"watch","groups":["channel:x"],"after":38,"id":2}   `after` is optional
  *   object → device  {"type":"watching","id":2,"groups":["channel:x"],"denied":[],"seq":40,"changes":[...],"more":false}
+ *   object → device  {"type":"error","id":1,"error":"bad after"}   a `pull` or `watch` whose `after` isn't a number of 0 or more
  *   device → object  {"type":"unwatch","groups":["channel:x"]}
  *   object → device  {"type":"changes","seq":41,"changes":[...]}   after each commit that touches its groups
  *   object → device  {"type":"groups","added":["team:x"],"removed":["team:y"]}   drop what's in removed
@@ -138,7 +139,12 @@ export class SyncSockets {
   private handle(ws: Socket, msg: JsonObject, type: string): void {
     const who = identity(ws);
     if (!who) {return;}
-    const after = typeof msg.after === 'number' && Number.isFinite(msg.after) && msg.after >= 0 ? msg.after : 0;
+    const badAfter = msg.after !== undefined && !(typeof msg.after === 'number' && Number.isFinite(msg.after) && msg.after >= 0);
+    if ((type === 'pull' || type === 'watch') && badAfter) {
+      trySend(ws, { type: 'error', id: msg.id, error: 'bad after' });
+      return;
+    }
+    const after = typeof msg.after === 'number' ? msg.after : 0;
     const limit = typeof msg.limit === 'number' ? msg.limit : undefined;
     if (type === 'pull') {
       trySend(ws, { type: 'pull', id: msg.id, epoch: this.epoch(), ...this.pulled(who.actor, who.groups, after, limit) });
@@ -149,7 +155,7 @@ export class SyncSockets {
       return;
     }
     if (type === 'unquery') {
-      const ids = strings(msg.ids);
+      const ids = Array.isArray(msg.ids) ? msg.ids.filter((id) => typeof id === 'string' || typeof id === 'number').map(String) : [];
       this.save(ws, { ...who, queries: (who.queries ?? []).filter((q) => !ids.includes(q.id)) });
       const mine = this.sent.get(ws);
       for (const id of ids) {
@@ -290,9 +296,14 @@ export class SyncSockets {
     const ok = !!name && topics.length <= MAX_ASKED && allowed.length === topics.length;
     const query: LiveQuery = { id, name, input: msg.input ?? null, topics };
     if (!ok || !this.save(ws, { ...who, queries: [...(who.queries ?? []).filter((q) => q.id !== id), query] })) {
+      // Decision: a query that is refused under an id also ends the query that id had before, so the device and the object agree.
+      if ((who.queries ?? []).some((q) => q.id === id)) {this.drop(ws, id);}
       trySend(ws, { type: 'result', id, denied: true });
       return;
     }
+    // Decision: a query sent again under the same id gets its answer again, even when the answer is the same.
+    const slot = this.sent.get(ws)?.get(id);
+    if (slot) {delete slot.json;}
     void this.answer(ws, who.actor, query);
   }
 

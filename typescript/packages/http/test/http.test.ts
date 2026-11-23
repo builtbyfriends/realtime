@@ -32,6 +32,15 @@ describe('rpcHandler', () => {
     expect((await post('/rpc/nope')).status).toBe(404);
   });
 
+  it('uses the built-in message for an unknown procedure everywhere, and sends data null for no value', async () => {
+    const outside = await rpc(new Request('https://api.test/elsewhere', { method: 'POST' }), env, ctx);
+    const unknown = await post('/rpc/nope');
+    expect(((await outside.json())).error.message).toBe('No such procedure');
+    expect(((await unknown.json())).error.message).toBe('No such procedure');
+    const { toResponse } = await import('@builtbyfriends/realtime-http');
+    expect(await toResponse({ ok: true, status: 200, value: undefined }).text()).toBe('{"data":null}');
+  });
+
   it('tags CLI calls for analytics', async () => {
     analytics.events.length = 0;
     await post('/rpc/contacts.get', { orgId: 'o1', id: 'c1' }, { authorization: 'Bearer bob', 'x-realtime-surface': 'cli' });

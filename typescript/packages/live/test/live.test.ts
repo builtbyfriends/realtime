@@ -338,4 +338,195 @@ describe('live store', () => {
       void live;
     });
   });
+
+  describe('review fixes', () => {
+    it('refetches at maxWaitMs while events keep coming, then starts the wait over', async () => {
+      const { call, t, live } = setup({ debounceMs: 50, maxWaitMs: 200 });
+      live.query('messages.list', { channel: 'a' }).subscribe(() => {});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(call).toHaveBeenCalledTimes(1);
+      const stream = async (from: number, to: number) => {
+        for (let at = from; at < to; at += 10) {
+          t.emit('messages:channel:a');
+          await vi.advanceTimersByTimeAsync(10);
+        }
+      };
+      await stream(0, 190);
+      expect(call).toHaveBeenCalledTimes(1);
+      await stream(190, 200);
+      expect(call).toHaveBeenCalledTimes(2);
+      await stream(200, 390);
+      expect(call).toHaveBeenCalledTimes(2);
+      await stream(390, 400);
+      expect(call).toHaveBeenCalledTimes(3);
+    });
+
+    it('reports a disabled, never started query as idle, and an enabled one as fetching', async () => {
+      const { call, live } = setup();
+      const off = live.query('messages.list', { channel: 'a' }, { enabled: false });
+      expect(off.getSnapshot()).toEqual({ status: 'loading', data: undefined, error: undefined, fetching: false });
+      expect(off.getSnapshot()).toBe(off.getSnapshot());
+      off.subscribe(() => {});
+      await flush();
+      expect(call).not.toHaveBeenCalled();
+      expect(off.getSnapshot().fetching).toBe(false);
+      const on = live.query('messages.list', { channel: 'b' });
+      expect(on.getSnapshot()).toMatchObject({ status: 'loading', fetching: true });
+    });
+
+    it('puts a collected entry back when a held handle subscribes, so update and refetch still reach it', async () => {
+      const { call, live } = setup({ cacheMs: 1000 });
+      const held = live.query('messages.list', { channel: 'a' });
+      held.subscribe(() => {})();
+      await vi.advanceTimersByTimeAsync(1500);
+      held.subscribe(() => {});
+      await flush();
+      expect(call).toHaveBeenCalledTimes(2);
+      live.update('messages.list', (data: any) => ({ ...data, patched: true }));
+      expect(held.getSnapshot().data).toMatchObject({ patched: true });
+      const fresh = live.query('messages.list', { channel: 'a' });
+      expect(fresh.getSnapshot()).toBe(held.getSnapshot());
+      await live.refetch('messages.list');
+      expect(call).toHaveBeenCalledTimes(3);
+    });
+
+    it('collects an entry whose handle never subscribed', async () => {
+      const { live } = setup({ cacheMs: 1000 });
+      const unwatched = live.query('messages.list', { channel: 'a' });
+      await unwatched.refetch();
+      expect(live.query('messages.list', { channel: 'a' }).getSnapshot().status).toBe('ready');
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(live.query('messages.list', { channel: 'a' }).getSnapshot().status).toBe('loading');
+    });
+
+    it('stops when the last enabled listener leaves even if a disabled one stays, and does not collect while listeners remain', async () => {
+      const { call, t, live } = setup({ cacheMs: 1000 });
+      const on = live.query('messages.list', { channel: 'a' }).subscribe(() => {});
+      const off = live.query('messages.list', { channel: 'a' }, { enabled: false });
+      const offStop = off.subscribe(() => {});
+      await flush();
+      expect(t.listeners('messages:channel:a')).toBe(1);
+      call.mockImplementationOnce(() => new Promise(() => {}));
+      t.emit('messages:channel:a');
+      await flush();
+      expect(off.getSnapshot()).toMatchObject({ status: 'ready', fetching: true });
+      on();
+      expect(off.getSnapshot()).toMatchObject({ status: 'ready', fetching: false });
+      expect(t.listeners('messages:channel:a')).toBe(0);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(live.query('messages.list', { channel: 'a' }).getSnapshot().status).toBe('ready');
+      offStop();
+    });
+
+    it('a disabled subscribe clears a pending collection timer', async () => {
+      const { live } = setup({ cacheMs: 1000 });
+      const stop = live.query('messages.list', { channel: 'a' }).subscribe(() => {});
+      await flush();
+      stop();
+      live.query('messages.list', { channel: 'a' }, { enabled: false }).subscribe(() => {});
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(live.query('messages.list', { channel: 'a' }).getSnapshot().status).toBe('ready');
+    });
+
+    it('shares one entry between topic lists that are equal as sets', async () => {
+      const { call, live } = setup();
+      live.query('thing', {} as any, { topics: ['b', 'a', 'a'] }).subscribe(() => {});
+      live.query('thing', {} as any, { topics: ['a', 'b'] }).subscribe(() => {});
+      await flush();
+      expect(call).toHaveBeenCalledTimes(1);
+    });
+
+    function slowChat() {
+      let messages = ['hi'];
+      let failList = false;
+      const failSend = new Set<string>();
+      const call = vi.fn(async (name: string, input: any) => {
+        await new Promise((r) => setTimeout(r, name === 'messages.send' && failSend.has(input.body) ? 50 : name === 'messages.send' ? 200 : 100));
+        if (name === 'messages.list') {
+          if (failList) {throw new Error('list down');}
+          return [...messages];
+        }
+        if (failSend.has(input.body)) {throw new Error('refused');}
+        messages = [...messages, input.body];
+        return null;
+      });
+      const live = createLive<any>({ client: { call } });
+      const q = live.query('messages.list', { channel: 'a' });
+      const stop = q.subscribe(() => {});
+      const opt = (body: string) => ({ optimistic: (store: any) => store.update('messages.list', { channel: 'a' }, (l: Array<string>) => [...l, body]) });
+      return { live, q, stop, opt, failSend, failList: () => void (failList = true) };
+    }
+
+    it('does not show a guess as data when a refetch fails after a rollback to another guess', async () => {
+      const { live, q, opt, failSend, failList } = slowChat();
+      await vi.advanceTimersByTimeAsync(150);
+      failSend.add('b');
+      const a = live.mutate('messages.send', { body: 'a' }, opt('a'));
+      const b = live.mutate('messages.send', { body: 'b' }, opt('b'));
+      const bFailed = expect(b).rejects.toThrow('refused');
+      expect(q.getSnapshot().data).toEqual(['hi', 'a', 'b']);
+      failList();
+      await vi.advanceTimersByTimeAsync(60);
+      await bFailed;
+      expect(q.getSnapshot().data).toEqual(['hi', 'a']);
+      await vi.advanceTimersByTimeAsync(300);
+      await a;
+      await vi.advanceTimersByTimeAsync(300);
+      expect(q.getSnapshot()).toMatchObject({ status: 'error', data: ['hi', 'a'] });
+    });
+
+    it('hides the guess of a mutation that is still pending when a fetch fails', async () => {
+      const { live, q, opt, failList } = slowChat();
+      await vi.advanceTimersByTimeAsync(150);
+      const sent = live.mutate('messages.send', { body: 'a' }, opt('a'));
+      failList();
+      await vi.advanceTimersByTimeAsync(20);
+      void live.refetch('messages.list');
+      await vi.advanceTimersByTimeAsync(110);
+      expect(q.getSnapshot()).toMatchObject({ status: 'error', data: ['hi'] });
+      await vi.advanceTimersByTimeAsync(300);
+      await sent;
+    });
+
+    it('keeps the guess of a mutation that succeeded when nothing watched the entry and a later fetch fails', async () => {
+      const { live, stop, opt, failList } = slowChat();
+      await vi.advanceTimersByTimeAsync(150);
+      stop();
+      const sent = live.mutate('messages.send', { body: 'yo' }, opt('yo'));
+      await vi.advanceTimersByTimeAsync(250);
+      await sent;
+      failList();
+      const again = live.query('messages.list', { channel: 'a' });
+      again.subscribe(() => {});
+      await vi.advanceTimersByTimeAsync(150);
+      expect(again.getSnapshot()).toMatchObject({ status: 'error', data: ['hi', 'yo'] });
+    });
+
+    it('applies update() to the settled data too while a guess is held', async () => {
+      const { live, q, opt, failList } = slowChat();
+      await vi.advanceTimersByTimeAsync(150);
+      const sent = live.mutate('messages.send', { body: 'a' }, opt('a'));
+      live.update('messages.list', (list: Array<string>) => [...list, 'synced']);
+      failList();
+      await vi.advanceTimersByTimeAsync(20);
+      void live.refetch('messages.list');
+      await vi.advanceTimersByTimeAsync(110);
+      expect(q.getSnapshot()).toMatchObject({ status: 'error', data: ['hi', 'synced'] });
+      await vi.advanceTimersByTimeAsync(300);
+      await sent;
+    });
+
+    it('replaces a guess held by an unwatched entry when it is watched again', async () => {
+      const { live, stop, opt } = slowChat();
+      await vi.advanceTimersByTimeAsync(150);
+      stop();
+      const sent = live.mutate('messages.send', { body: 'yo' }, opt('yo'));
+      await vi.advanceTimersByTimeAsync(250);
+      await sent;
+      const again = live.query('messages.list', { channel: 'a' });
+      again.subscribe(() => {});
+      await vi.advanceTimersByTimeAsync(150);
+      expect(again.getSnapshot()).toMatchObject({ status: 'ready', data: ['hi', 'yo'], fetching: false });
+    });
+  });
 });

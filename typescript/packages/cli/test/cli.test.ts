@@ -130,6 +130,40 @@ describe('cli', () => {
     expect(err).toContain("isn't JSON");
   });
 
+  it('prints a plain error when the error body has the wrong shape', async () => {
+    let err = '';
+    const odd: typeof fetch = async (input, init) => (String(input).endsWith('manifest.json') ? f(input, init) : new Response('{"error":"boom"}', { status: 502 }));
+    const code = await run({ argv: ['ping'], env: { REALTIME_URL: 'https://api.test', REALTIME_TOKEN: 'bob' }, fetch: odd, stdout: () => {}, stderr: (s) => (err += s) });
+    expect(code).toBe(1);
+    expect(err).toContain('error INTERNAL: HTTP 502');
+  });
+
+  it('keeps the token on the host the user named, and strips control characters from server text', async () => {
+    let err = '';
+    const sent: Array<string> = [];
+    const hostile: typeof fetch = async (input, init) => {
+      if (!String(input).endsWith('manifest.json')) {
+        sent.push(String(input));
+        return new Response(JSON.stringify({ error: { code: 'NOPE', message: 'bad\u001b]0;title\u0007 thing' } }), { status: 400 });
+      }
+      const manifest = await (await f(input, init)).json();
+      for (const p of manifest.procedures) {if (p.name === 'ping') {p.path = '@evil.test/steal';}}
+      return new Response(JSON.stringify(manifest));
+    };
+    const io = { env: { REALTIME_URL: 'https://api.test', REALTIME_TOKEN: 'bob' }, fetch: hostile, stdout: () => {}, stderr: (s: string) => (err += s) };
+    expect(await run({ argv: ['ping'], ...io })).toBe(1);
+    expect(sent).toEqual([]);
+    expect(err).toContain('another host');
+    err = '';
+    expect(await run({ argv: ['contacts', 'get', '--org-id', 'o1', '--id', 'c1'], ...io })).toBe(1);
+    expect(err).toContain('error NOPE: bad]0;title thing');
+  });
+
+  it('refuses an empty value for a number', async () => {
+    const r = await cli('contacts', 'search', '--query', 'x', '--limit=');
+    expect(r.code).toBe(2);
+  });
+
   it('fails when --url or --token has no value', async () => {
     const url = await cli('contacts', 'search', '--query', 'x', '--url');
     expect(url).toMatchObject({ code: 2, err: 'realtime: --url needs a value\n' });
@@ -144,5 +178,28 @@ describe('cli', () => {
       expect(r.err).toContain('--json must be a JSON object');
     }
     expect(JSON.parse((await cli('contacts', 'search', '--json', '{"query":"q"}')).out).input).toEqual({ query: 'q' });
+  });
+
+  it('sends true for --no-x=false and false for --no-x=true', async () => {
+    const send = async (...a: Array<string>) => JSON.parse((await cli('contacts', 'search', '--query', 'x', ...a)).out).input.exact;
+    expect(await send('--no-exact=false')).toBe(true);
+    expect(await send('--no-exact=true')).toBe(false);
+    const r = await cli('contacts', 'search', '--query', 'x', '--no-exact=maybe');
+    expect(r.code).toBe(2);
+  });
+
+  it('reports a manifest in the wrong shape', async () => {
+    const bad = [{ procedures: 'x' }, { procedures: [{ path: '/a', cli: null, errors: {} }] }, { procedures: [{ path: '/a', cli: { command: 'a', description: 'a' }, errors: {}, input: { properties: { k: { enum: 'x' } } } }] }];
+    for (const m of bad) {
+      let err = '';
+      const code = await run({ argv: ['a'], env: { REALTIME_URL: 'https://api.test' }, fetch: async () => new Response(JSON.stringify(m)), stdout: () => {}, stderr: (s) => (err += s) });
+      expect({ code, err }).toEqual({ code: 1, err: "realtime: the server's manifest isn't in the expected shape\n" });
+    }
+  });
+
+  it('says in help that a property named like a CLI flag needs --json', async () => {
+    const r = await cli('links', 'add', '--help');
+    expect(r.out).toContain("url can't be set with a flag");
+    expect(r.out).toContain(`--json '{"url": ...}'`);
   });
 });
