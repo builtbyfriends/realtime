@@ -150,6 +150,7 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
     functions,
     engine,
     durableObject(Base) {
+      // oxlint-disable-next-line anti-slop/no-chained-type-assertions
       return class extends (Base as unknown as new (...args: any[]) => object) {
         #engine: Engine;
         #sockets: SyncSockets;
@@ -195,6 +196,7 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
           }
           if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response('expected a WebSocket', { status: 426 });
           // Decision: read WebSocketPair from globalThis, because this package doesn't load the Workers types.
+          // oxlint-disable-next-line anti-slop/no-chained-type-assertions
           const Pair = (globalThis as unknown as { WebSocketPair: new () => [unknown, unknown] }).WebSocketPair;
           const [device, object] = new Pair();
           this.#sockets.accept(object as never, JSON.parse(header) as SocketIdentity);

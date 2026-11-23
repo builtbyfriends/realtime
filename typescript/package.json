@@ -11,7 +11,7 @@
     "typecheck": "tsc -b && tsc -p packages/core/type-tests/tsconfig.json && tsc -p packages/core/type-tests/tsconfig.perf.json && tsc -p packages/data/type-tests/tsconfig.json && tsc -p examples/contacts-worker/tsconfig.json && tsc -p examples/chat-worker/tsconfig.json",
     "test": "vitest run",
     "test:types": "node scripts/type-errors.mjs",
-    "lint": "cd .. && bunx oxlint@1.94.0 -c .oxlintrc.json typescript bwf",
+    "lint": "cd ../lint && bun install --frozen-lockfile && cd .. && lint/node_modules/.bin/oxlint -c .oxlintrc.json typescript bwf",
     "e2e": "npm run build && node scripts/e2e.mjs && node scripts/e2e-data.mjs",
     "check": "npm run typecheck && npm run test:types && npm test"
   },

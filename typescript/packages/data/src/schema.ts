@@ -21,6 +21,7 @@ export type TableDef<D = any> = {
 export type Schema = Record<string, TableDef>;
 
 /** Declares a table. `table<Message>({...})` types every read and write. */
+// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-values
 export function table<D extends Record<string, any> = Record<string, any>>(def: Omit<TableDef<D>, '~doc'> = {}): TableDef<D> {
   return def as TableDef<D>;
 }

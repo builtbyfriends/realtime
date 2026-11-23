@@ -1,8 +1,53 @@
 {
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
-  "jsPlugins": ["./lint/comments.mjs"],
+  // Decision: The plugins from npm install into lint/ with bun (lint/package.json), so the npm lockfile the publish
+  // workflow reads stays as it is. `bun run lint` in typescript/ installs them first.
+  "jsPlugins": [
+    "./lint/comments.mjs",
+    { "name": "anti-slop", "specifier": "./lint/node_modules/oxlint-anti-slop/dist/index.js" },
+    "./lint/node_modules/eslint-plugin-react-you-might-not-need-an-effect/dist/index.mjs"
+  ],
+  "plugins": ["typescript", "unicorn", "oxc", "react", "promise"],
   "rules": {
-    "realtime/no-comments": "error"
+    "realtime/no-comments": "error",
+    "no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_", "ignoreRestSiblings": true }],
+    // Decision: The type tests read properties only to check their types.
+    "no-unused-expressions": "off",
+    // Decision: Copying listeners before calling them lets a listener unsubscribe while the loop runs.
+    "unicorn/no-useless-spread": "off",
+    // Decision: middleware.ts points at the virtual module's types, which have no module to import.
+    "typescript/triple-slash-reference": "off",
+    // Decision: The rules below guard against shortcuts that pass a typecheck and a quick review. A cast the code needs
+    // at a boundary gets an oxlint-disable-next-line with the rule's name.
+    "anti-slop/no-chained-type-assertions": "error",
+    "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-reduce-accumulator-copy": "error",
+    "anti-slop/no-meaningless-unknown-aliases": "error",
+    "anti-slop/no-unsafe-dictionary-values": "error",
+    "anti-slop/no-narrowing-after-widening": "error",
+    "react-you-might-not-need-an-effect/no-derived-state": "error",
+    "react-you-might-not-need-an-effect/no-chain-state-updates": "error",
+    "react-you-might-not-need-an-effect/no-event-handler": "error",
+    "react-you-might-not-need-an-effect/no-adjust-state-on-prop-change": "error",
+    "react-you-might-not-need-an-effect/no-reset-all-state-on-prop-change": "error",
+    "react-you-might-not-need-an-effect/no-pass-live-state-to-parent": "error",
+    "react-you-might-not-need-an-effect/no-pass-data-to-parent": "error",
+    "react-you-might-not-need-an-effect/no-external-store-subscription": "error",
+    "react-you-might-not-need-an-effect/no-initialize-state": "error",
+    "react/rules-of-hooks": "error",
+    // Decision: useLiveQuery keys its memo on a stable string of the input, which this rule can't follow.
+    "react/exhaustive-deps": "off"
   },
+  "overrides": [
+    {
+      // Decision: Tests reach into mocks and pass loose fixtures.
+      "files": ["**/*.test.*", "**/test/**", "**/type-tests/**"],
+      "rules": {
+        "anti-slop/no-chained-type-assertions": "off",
+        "anti-slop/no-object-parameters": "off",
+        "anti-slop/no-unsafe-dictionary-values": "off"
+      }
+    }
+  ],
   "ignorePatterns": ["**/node_modules/**", "**/dist/**", "**/.bwf/**", "bwf/demo/db/migrations/**"]
 }

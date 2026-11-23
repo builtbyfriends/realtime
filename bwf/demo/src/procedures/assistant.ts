@@ -10,7 +10,7 @@ type Msg = z.infer<typeof Message>;
 type ToolUse = { type: 'tool_use'; id: string; name: string; input: unknown };
 
 const toolUses = (m: Msg | undefined): ToolUse[] =>
-  m?.role === 'assistant' && Array.isArray(m.content) ? (m.content.filter((b) => b.type === 'tool_use') as unknown as ToolUse[]) : [];
+  m?.role === 'assistant' && Array.isArray(m.content) ? m.content.filter((b): b is typeof b & ToolUse => b.type === 'tool_use') : [];
 
 // Decision: each tool call runs as the signed-in user, so the tools' auth, policies and approvals apply.
 // When a tool needs approval the turn stops and returns `pending`. Send the same messages back with

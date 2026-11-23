@@ -1,6 +1,6 @@
 import type { Plugin } from 'vite';
 import { globSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 
 const REGISTRY = 'virtual:realtime-registry';
 const RESOLVED = '\0' + REGISTRY;

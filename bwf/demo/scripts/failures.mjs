@@ -1,12 +1,13 @@
 // Decision: each case runs in a scratch copy of this app next to it, so the demo itself stays untouched.
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { Miniflare, NoOpLog } from 'miniflare';
 
 const root = new URL('..', import.meta.url).pathname;
 const tmp = join(root, '..', 'demo-failure-tmp');
 const h = (title) => console.log(`\n${'='.repeat(78)}\n${title}\n${'='.repeat(78)}`);
+// oxlint-disable-next-line no-control-regex
 const clean = (s) => s.replace(/\x1b\[[0-9;]*m/g, '').replaceAll(tmp + '/', '').replaceAll(root, '');
 
 function fresh() {

@@ -20,3 +20,7 @@ This repository takes an app as input and doesn't know which app it is. Code, te
 ## Comments
 
 Code comments tend to repeat the code, go stale, or excuse a shortcut, so the `realtime/no-comments` oxlint rule (`lint/comments.mjs`, `bun run lint` in `typescript/`) bans them. It allows a decision record that starts with `Decision:`, tool directives such as `@ts-expect-error <why>`, and JSDoc on the published API in `typescript/packages/*/src`. `/delete-comment` (`.claude/skills/delete-comment`) walks through an audit.
+
+## Lint
+
+`bun run lint` in `typescript/` runs oxlint with the root `.oxlintrc.json`. Besides the comment rule it loads `oxlint-anti-slop` (type shortcuts such as `as unknown as T`, `object` parameters and `Record<string, any>`) and `eslint-plugin-react-you-might-not-need-an-effect`. Both install into `lint/` with bun, so the npm lockfile in `typescript/` stays as it is. A cast the code needs at a boundary gets an `oxlint-disable-next-line` with the rule's name.

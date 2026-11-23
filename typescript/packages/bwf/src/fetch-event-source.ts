@@ -49,7 +49,7 @@ export function fetchEventSource(options: FetchEventSourceOptions): FetchEventSo
       this.#abort.abort();
     }
 
-    #emit(type: string, event: object = {}) {
+    #emit(type: string, event: Record<string, unknown> = {}) {
       if (this.#closed) return;
       for (const listener of [...(this.#listeners.get(type) ?? [])]) listener({ type, ...event });
     }
