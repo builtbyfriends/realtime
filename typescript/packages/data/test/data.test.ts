@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { defineData, defineSchema, table } from '../src/index.js';
 import { memoryStorage } from './storage.js';
 
-type Message = { channel: string; author: string; body: string; at: number; pinned?: boolean; embedding?: number[] };
+type Message = { channel: string; author: string; body: string; at: number; pinned?: boolean; embedding?: Array<number> };
 
 const schema = defineSchema({
   messages: table<Message>({
@@ -13,8 +13,8 @@ const schema = defineSchema({
   }),
 });
 
-function setup(options: { onCommit?: (topics: string[]) => void; seed?: boolean } = {}) {
-  const calls: string[] = [];
+function setup(options: { onCommit?: (topics: Array<string>) => void | Promise<void>; seed?: boolean } = {}) {
+  const calls: Array<string> = [];
   const data = defineData({
     schema,
     functions: ({ query, mutation }) => ({
@@ -39,10 +39,10 @@ function setup(options: { onCommit?: (topics: string[]) => void; seed?: boolean 
       find: query((ctx, a: { text: string; channel?: string }) =>
         ctx.db.search('messages', 'body', a.text, { eq: a.channel ? { channel: a.channel } : undefined }).map((m) => m.body),
       ),
-      nearest: query((ctx, a: { v: number[]; channel?: string }) =>
+      nearest: query((ctx, a: { v: Array<number>; channel?: string }) =>
         ctx.db.vectorSearch('messages', 'embedding', a.v, { eq: a.channel ? { channel: a.channel } : undefined, limit: 2 }).map((r) => r.doc.body),
       ),
-      embed: mutation((ctx, a: { id: string; v: number[] }) => ctx.db.patch('messages', a.id, { embedding: a.v })),
+      embed: mutation((ctx, a: { id: string; v: Array<number> }) => ctx.db.patch('messages', a.id, { embedding: a.v })),
       count: query((ctx) => ctx.db.query('messages').collect().length),
     }),
     jobs: (job) => ({
@@ -86,7 +86,7 @@ function setup(options: { onCommit?: (topics: string[]) => void; seed?: boolean 
 describe('documents and indexes', () => {
   it('inserts, reads through an index in both directions and takes a limit', async () => {
     const { call } = setup();
-    for (let i = 1; i <= 4; i++) await call.m('send', { channel: 'general', body: `m${i}`, at: i });
+    for (let i = 1; i <= 4; i++) {await call.m('send', { channel: 'general', body: `m${i}`, at: i });}
     await call.m('send', { channel: 'other', body: 'x', at: 9 });
     expect(await call.q('list', { channel: 'general', limit: 2 })).toEqual(['m4', 'm3']);
     expect(await call.q('since', { channel: 'general', at: 3 })).toEqual(['m3', 'm4']);
@@ -121,9 +121,9 @@ describe('schema sync', () => {
   it('skips the pass on a wake with the same schema, and runs it when the schema changed', async () => {
     const { syncSchema } = await import('../src/index.js');
     const { storage } = setup();
-    const statements: string[] = [];
+    const statements: Array<string> = [];
     const exec = storage.sql.exec.bind(storage.sql);
-    storage.sql.exec = (query: string, ...bindings: unknown[]) => (statements.push(query), exec(query, ...bindings));
+    storage.sql.exec = (query: string, ...bindings: Array<unknown>) => (statements.push(query), exec(query, ...bindings));
     syncSchema(storage, schema);
     expect(statements).toHaveLength(2);
     statements.length = 0;
@@ -153,16 +153,17 @@ describe('index clean-up', () => {
 });
 
 describe('schema edges', () => {
-  type Note = { owner: string; body: string; tag?: string | null; v?: number[] };
-  const notes = (extra: object = {}) => defineSchema({ notes: table<Note>({ indexes: { by_owner: ['owner'], by_tag: ['tag'] }, ...extra }) });
+  type Note = { owner: string; body: string; tag?: string | null; v?: Array<number> };
+  type Extra = Parameters<typeof table<Note>>[0];
+  const notes = (extra: Extra = {}) => defineSchema({ notes: table<Note>({ indexes: { by_owner: ['owner'], by_tag: ['tag'] }, ...extra }) });
   const fns = ({ query, mutation }: any) => ({
     add: mutation((ctx: any, a: Note) => ctx.db.insert('notes', a)),
     find: query((ctx: any, text: string) => ctx.db.search('notes', 'body', text).map((n: Note) => n.body)),
-    near: query((ctx: any, v: number[]) => ctx.db.vectorSearch('notes', 'v', v).map((r: { doc: Note }) => r.doc.body)),
+    near: query((ctx: any, v: Array<number>) => ctx.db.vectorSearch('notes', 'v', v).map((r: { doc: Note }) => r.doc.body)),
     untagged: query((ctx: any) => ctx.db.query('notes').withIndex('by_tag', (q: any) => q.eq('tag', undefined)).collect().map((n: Note) => n.body)),
     twice: query((ctx: any) => ctx.db.query('notes').withIndex('by_owner', (q: any) => q.eq('owner', 'ann')).withIndex('by_tag').collect()),
   });
-  const open = (storage: ReturnType<typeof memoryStorage>, extra: object = {}) => {
+  const open = (storage: ReturnType<typeof memoryStorage>, extra: Extra = {}) => {
     const engine = defineData({ schema: notes(extra), functions: fns }).engine(storage);
     engine.init();
     return engine;
@@ -249,7 +250,7 @@ describe('live topics', () => {
     const onCommit = vi.fn();
     const { call } = setup({ onCommit });
     const id = await call.m('send', { channel: 'general', body: 'hi' });
-    expect(onCommit.mock.calls[0]![0].sort()).toEqual(['messages', `messages:${id}`, 'messages:channel:general'].sort());
+    expect(onCommit.mock.calls[0][0].sort()).toEqual(['messages', `messages:${id}`, 'messages:channel:general'].sort());
     await call.q('count');
     await expect(call.m('sendThenFail', { channel: 'x' })).rejects.toThrow();
     expect(onCommit).toHaveBeenCalledTimes(1);
@@ -279,8 +280,8 @@ describe('scheduler', () => {
     const { call, engine, storage, calls } = setup();
     const before = Date.now();
     await call.m('later', { ms: 60_000 });
-    await call.m('later', { ms: 5_000 });
-    expect(storage.alarm()).toBeGreaterThanOrEqual(before + 5_000);
+    await call.m('later', { ms: 5000 });
+    expect(storage.alarm()).toBeGreaterThanOrEqual(before + 5000);
     expect(storage.alarm()).toBeLessThan(before + 10_000);
     await engine.alarm();
     expect(calls).toEqual([]);
@@ -298,9 +299,9 @@ describe('scheduler', () => {
     expect(await call.m('cancel', { id })).toBe(false);
     expect(storage.alarm()).toBeNull();
     await call.m('later', { ms: 50_000, id: 'debounce' });
-    await call.m('later', { ms: 1_000, id: 'debounce' });
+    await call.m('later', { ms: 1000, id: 'debounce' });
     expect(storage.db.prepare('SELECT COUNT(*) AS n FROM _jobs').get()).toEqual({ n: 1 });
-    vi.useFakeTimers({ now: Date.now() + 2_000 });
+    vi.useFakeTimers({ now: Date.now() + 2000 });
     await engine.alarm();
     vi.useRealTimers();
     expect(calls).toEqual(['ping:1:1']);
@@ -375,7 +376,7 @@ describe('a job that takes the object down', () => {
       void engine.alarm();
       return new Promise((r) => setTimeout(r, 2));
     };
-    for (let i = 0; i < 10; i++) await crashed();
+    for (let i = 0; i < 10; i++) {await crashed();}
     expect(engine.scheduler().get('h')).toMatchObject({ status: 'pending', attempts: 0 });
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     await crashed();
@@ -414,10 +415,10 @@ describe('guards on functions and jobs', () => {
     const due = scheduler.due(Date.now() + 1, 10);
     scheduler.cancel('b');
     expect(due).toHaveLength(2);
-    expect(scheduler.started(due[1]!)).toBeNull();
-    expect(scheduler.started(due[0]!)).toBe(1);
+    expect(scheduler.started(due[1])).toBeNull();
+    expect(scheduler.started(due[0])).toBe(1);
     scheduler.runAfter(0, 'ping', { n: 3 }, { id: 'a' });
-    expect(scheduler.started(scheduler.due(Date.now() + 1, 10)[0]!)).toBe(1);
+    expect(scheduler.started(scheduler.due(Date.now() + 1, 10)[0])).toBe(1);
     expect(calls).toEqual([]);
   });
 });

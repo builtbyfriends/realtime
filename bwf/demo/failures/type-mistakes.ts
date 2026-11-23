@@ -26,6 +26,7 @@ export const undeclared = procedure('contacts.archive')
   .handler(({ fail }) => fail('ALREADY_ARCHIVED'));
 
 export const authzFirst = procedure('authz.first')
+  // oxlint-disable-next-line typescript/no-explicit-any -- fixture: the check is left untyped on purpose
   .authz({ policy: 'admin', check: (user: any) => user.role === 'admin' });
 
 export const twice = procedure('twice')

@@ -17,14 +17,16 @@ const call = async (name, body) => {
   return json.data;
 };
 const check = async (name, fn) => (await fn(), console.log(`  ok  ${name}`));
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 try {
   for (let i = 0; ; i++) {
-    if (i > 60) throw new Error(`wrangler dev did not start:\n${log}`);
-    try {
-      if ((await fetch(`${base}/rpc/messages.list`, { method: 'POST', body: JSON.stringify({ channel: 'warmup' }) })).ok) break;
-    } catch {}
+    if (i > 60) {throw new Error(`wrangler dev did not start:\n${log}`);}
+    const ready = await fetch(`${base}/rpc/messages.list`, { method: 'POST', body: JSON.stringify({ channel: 'warmup' }) }).then((res) => res.ok, () => false);
+    if (ready) {break;}
     await sleep(500);
   }
   const channel = `c${Date.now()}`;

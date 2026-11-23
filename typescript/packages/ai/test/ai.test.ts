@@ -38,7 +38,7 @@ describe('ai tools', () => {
   it('builds AI SDK tools with needsApproval', async () => {
     const tools = aiSdkTools(registry, { request: req('bob'), env }, { jsonSchema: (s) => ({ wrapped: s }) });
     expect(Object.keys(tools)).toEqual(['contacts_get', 'cache_purge']);
-    expect(tools.cache_purge!.needsApproval).toBe(true);
-    expect(await tools.contacts_get!.execute({ orgId: 'o1', id: 'c1' })).toEqual({ id: 'c1', owner: 'u-bob' });
+    expect(tools.cache_purge.needsApproval).toBe(true);
+    expect(await tools.contacts_get.execute({ orgId: 'o1', id: 'c1' })).toEqual({ id: 'c1', owner: 'u-bob' });
   });
 });

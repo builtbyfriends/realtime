@@ -1,16 +1,17 @@
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from '@standard-schema/spec';
 
 /** Any Standard Schema (Zod, Valibot, ArkType, ...). */
-export type AnySchema = StandardSchemaV1<any, any>;
-export type InferIn<S> = S extends StandardSchemaV1<infer I, any> ? I : never;
-export type InferOut<S> = S extends StandardSchemaV1<any, infer O> ? O : never;
+export type AnySchema = StandardSchemaV1<unknown, unknown>;
+export type InferIn<S> = S extends StandardSchemaV1<infer I, unknown> ? I : never;
+export type InferOut<S> = S extends StandardSchemaV1<unknown, infer O> ? O : never;
 
+// oxlint-disable-next-line quality/no-unsafe-dictionary-type -- a JSON Schema document is an open set of keywords by spec
 export type JsonSchema = Record<string, unknown>;
 
 export async function validate(
   schema: AnySchema,
   value: unknown,
-): Promise<{ ok: true; value: unknown } | { ok: false; issues: { message: string; path: string }[] }> {
+): Promise<{ ok: true; value: unknown } | { ok: false; issues: Array<{ message: string; path: string }> }> {
   const result = await schema['~standard'].validate(value);
   if (result.issues) {
     return {
@@ -29,7 +30,7 @@ export async function validate(
  * Zod 4.2+ and ArkType implement it directly; wrap Valibot schemas with
  * `toStandardJsonSchema` from `@valibot/to-json-schema`.
  */
-export function toJsonSchema(schema: AnySchema, io: 'input' | 'output'): JsonSchema {
+export function toJsonSchema(schema: AnySchema, io: 'input' | 'output') {
   const converter = (schema['~standard'] as Partial<StandardJSONSchemaV1.Props>).jsonSchema;
   if (!converter) {
     throw new Error(

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import * as v from 'valibot';
+import { object, string } from 'valibot';
 import { toStandardJsonSchema } from '@valibot/to-json-schema';
 import { defineRegistry, procedure } from '@builtbyfriends/realtime';
 import { memoryAnalytics } from '@builtbyfriends/realtime-analytics';
 import { getContact, ping, purge } from './fixtures.js';
 
-const R = (why: string) => ({ reason: why as string });
+const R = (why: string) => ({ reason: why });
 // Decision: built with plain strings, the way untyped JS would.
 const full = (name: string, overrides: (b: any) => any = (b) => b) =>
   overrides(
@@ -47,8 +47,8 @@ describe('registry load-time checks (the deploy gate)', () => {
     try {
       defineRegistry([one, one, ping, ping]);
       expect.unreachable();
-    } catch (e) {
-      const msg = (e as Error).message;
+    } catch (error) {
+      const msg = (error as Error).message;
       expect(msg).toMatch(/problem\(s\)/);
       expect(msg).toContain('"dup": mcp opt-out');
       expect(msg).toContain('"ping": registered twice');
@@ -70,15 +70,15 @@ describe('registry load-time checks (the deploy gate)', () => {
   it('converts JSON Schema at load, so unsupported schemas fail the deploy', () => {
     const exposed = (input: any) =>
       finish(full('tool.x').input(input).mcp({ description: 'A tool', effect: 'read' }).noAiTool(R('Agents use MCP for this')));
-    expect(() => defineRegistry([exposed(v.object({ q: v.string() }))])).toThrow(/does not implement Standard JSON Schema[\s\S]*toStandardJsonSchema/);
-    const ok = finish(full('tool.y').input(toStandardJsonSchema(v.object({ q: v.string() }))).mcp({ description: 'A tool', effect: 'read' }).noAiTool(R('Agents use MCP for this')), toStandardJsonSchema(v.object({})));
+    expect(() => defineRegistry([exposed(object({ q: string() }))])).toThrow(/does not implement Standard JSON Schema[\s\S]*toStandardJsonSchema/);
+    const ok = finish(full('tool.y').input(toStandardJsonSchema(object({ q: string() }))).mcp({ description: 'A tool', effect: 'read' }).noAiTool(R('Agents use MCP for this')), toStandardJsonSchema(object({})));
     expect(() => defineRegistry([ok])).not.toThrow();
     expect(() => defineRegistry([exposed(z.string())])).toThrow(/must be an object schema/);
     expect(() => defineRegistry([exposed(z.object({ when: z.date() }))])).toThrow(/input schema/);
   });
 
   it('allows any Standard Schema when nothing needs JSON Schema', () => {
-    const hidden = finish(full('hidden').input(v.object({ q: v.string() })).noMcp(R('Not useful to agents')).noAiTool(R('Not useful to agents')), v.object({}));
+    const hidden = finish(full('hidden').input(object({ q: string() })).noMcp(R('Not useful to agents')).noAiTool(R('Not useful to agents')), object({}));
     expect(() => defineRegistry([hidden])).not.toThrow();
   });
 

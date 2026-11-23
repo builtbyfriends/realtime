@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createLive, stableKey, type LiveTransport } from '../src/index.js';
+import { createLive, stableKey } from '../src/index.js';
+import type { LiveTransport } from '../src/index.js';
 
 function fakeTransport() {
   const topics = new Map<string, Set<() => void>>();
@@ -56,7 +57,7 @@ describe('live store', () => {
     const q = live.query('messages.list', { channel: 'a' });
     q.subscribe(() => {});
     await flush();
-    for (let i = 0; i < 5; i++) t.emit('messages:channel:a');
+    for (let i = 0; i < 5; i++) {t.emit('messages:channel:a');}
     await flush();
     expect(call).toHaveBeenCalledTimes(2);
     expect(q.getSnapshot().data).toMatchObject({ n: 2 });
@@ -72,10 +73,10 @@ describe('live store', () => {
     t.reconnect();
     await flush();
     expect(call).toHaveBeenCalledTimes(1);
-    gates[0]!();
+    gates[0]();
     await flush();
     expect(call).toHaveBeenCalledTimes(2);
-    gates[1]!();
+    gates[1]();
     await flush();
     expect(q.getSnapshot()).toMatchObject({ status: 'ready', data: { n: 2 }, fetching: false });
   });
@@ -134,7 +135,7 @@ describe('live store', () => {
 
   it('drops a subscription that resolves after the watcher left', async () => {
     const { t, live } = setup();
-    const slow: LiveTransport = { ...t.transport, subscribe: (topic, cb) => new Promise((res) => setTimeout(() => res(t.transport.subscribe(topic, cb) as any), 200)) };
+    const slow: LiveTransport = { ...t.transport, subscribe: (topic, cb) => new Promise((res) => setTimeout(() => res(t.transport.subscribe(topic, cb)), 200)) };
     const l = createLive<any>({ client: { call: async () => 1 }, transport: slow, topics: { x: () => ['t'] } });
     const stop = l.query('x', {}).subscribe(() => {});
     stop();
@@ -159,9 +160,9 @@ describe('live store', () => {
       let messages = ['hi'];
       let fail = false;
       const call = vi.fn(async (name: string, input: any) => {
-        if (name === 'messages.list') return [...messages];
+        if (name === 'messages.list') {return [...messages];}
         await new Promise((r) => setTimeout(r, 100));
-        if (fail) throw new Error('refused');
+        if (fail) {throw new Error('refused');}
         messages = [...messages, input.body];
         return null;
       });
@@ -169,7 +170,7 @@ describe('live store', () => {
       const q = live.query('messages.list', { channel: 'a' });
       q.subscribe(() => {});
       const optimistic = (body: string) => ({
-        optimistic: (store: any) => store.update('messages.list', { channel: 'a' }, (list: string[]) => [...list, body]),
+        optimistic: (store: any) => store.update('messages.list', { channel: 'a' }, (list: Array<string>) => [...list, body]),
       });
       return { live, q, call, optimistic, refuse: () => void (fail = true) };
     }
@@ -245,12 +246,12 @@ describe('live store', () => {
       q.subscribe(() => {});
       await flush();
       expect(call).toHaveBeenCalledTimes(2);
-      gates[0]!('old');
+      gates[0]('old');
       await flush();
       t.emit('messages');
       await flush();
       expect(call).toHaveBeenCalledTimes(2);
-      gates[1]!('new');
+      gates[1]('new');
       await flush();
       expect(call).toHaveBeenCalledTimes(3);
     });
@@ -263,7 +264,7 @@ describe('live store', () => {
       await flush();
       const sent = live.mutate('messages.send', {}, {
         optimistic: (store: any) => {
-          store.update('messages.list', { channel: 'a' }, (list: string[]) => [...list, 'yo']);
+          store.update('messages.list', { channel: 'a' }, (list: Array<string>) => [...list, 'yo']);
           throw new Error('bad guess');
         },
       });
@@ -289,11 +290,11 @@ describe('live store', () => {
       await flush();
       let done = false;
       const p = q.refetch().then(() => void (done = true));
-      gates[0]!('stale');
+      gates[0]('stale');
       await flush();
       expect(call).toHaveBeenCalledTimes(2);
       expect(done).toBe(false);
-      gates[1]!('fresh');
+      gates[1]('fresh');
       await p;
       expect(q.getSnapshot().data).toBe('fresh');
     });

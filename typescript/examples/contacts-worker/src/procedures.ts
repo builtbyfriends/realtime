@@ -9,11 +9,13 @@ export type Env = {
 
 const { procedure, profile } = createProcedures<Env>();
 
+const Tokens = z.record(z.string(), z.object({ id: z.string(), orgId: z.string(), role: z.enum(['admin', 'member']) }));
+
 const apiToken = bearerAuth<User, Env>({
   name: 'api-token',
   verify: (token, env) => {
-    const users = JSON.parse(env.API_TOKENS) as Record<string, User>;
-    return Object.hasOwn(users, token) ? users[token]! : null;
+    const users = Tokens.parse(JSON.parse(env.API_TOKENS));
+    return Object.hasOwn(users, token) ? (users[token] ?? null) : null;
   },
   actorId: (u) => u.id,
 });
@@ -46,7 +48,7 @@ export const getContact = procedure('contacts.get')
   .noAiTool({ reason: 'Returns PII; agents use contacts.search, which redacts email' })
   .handler(({ input, fail }) => {
     const c = contacts.get(input.id);
-    if (!c || c.orgId !== input.orgId) return fail('NOT_FOUND');
+    if (!c || c.orgId !== input.orgId) {return fail('NOT_FOUND');}
     return c;
   });
 
@@ -77,7 +79,7 @@ export const deleteContact = procedure('contacts.delete')
   .aiTool({ description: 'Delete a contact permanently', needsApproval: true })
   .handler(({ input, ctx, fail }) => {
     const c = contacts.get(input.id);
-    if (!c || c.orgId !== ctx.orgId) return fail('NOT_FOUND');
+    if (!c || c.orgId !== ctx.orgId) {return fail('NOT_FOUND');}
     contacts.delete(input.id);
     return { deleted: true };
   });

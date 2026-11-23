@@ -7,7 +7,7 @@ function setup() {
   const analytics = memoryAnalytics();
   const onError = vi.fn();
   const registry = defineRegistry([getContact, purge, ping], { analytics, onError });
-  const pending: Promise<unknown>[] = [];
+  const pending: Array<Promise<unknown>> = [];
   const call = async (name: string, input: unknown, token?: string) => {
     const r = await registry.call(name, input, { request: req(token), env, surface: 'http', waitUntil: (p) => pending.push(p) });
     await Promise.all(pending);

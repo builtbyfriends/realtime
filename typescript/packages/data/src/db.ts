@@ -1,10 +1,14 @@
-import { bindable, fieldSql, hash, ident, run, type DataStorage } from './storage.js';
-import type { Doc, NewDoc, Schema, TableDef } from './schema.js';
+import { bindable, fieldSql, hash, ident, isJsonArray, isJsonObject, parseDoc, run } from './storage.js';
+import type { DataStorage } from './storage.js';
+import type { Doc, JsonObject, JsonValue, NewDoc, Schema, TableDef } from './schema.js';
 import { ChangeRecorder } from './changes.js';
 
 const SYSTEM = new Set(['_id', '_creationTime']);
 
 type Row = { _rowid: number; _id: string; _creationTime: number; doc: string };
+/** Values a search or vector query can match a filter field against. */
+export type FilterValues = { [field: string]: string | number | boolean | null | undefined };
+
 type Cond = { field: string; op: '=' | '>' | '>=' | '<' | '<='; value: unknown };
 
 /** Range builder passed to `withIndex`: equality on a prefix of the index, then one range. */
@@ -27,14 +31,14 @@ export class DbReader<S extends Schema> {
   /** @internal */
   protected def(name: string): TableDef {
     const def = this.schema[name];
-    if (!def) throw new Error(`no table "${name}" in the schema`);
+    if (!def) {throw new Error(`no table "${name}" in the schema`);}
     return def;
   }
 
   get<T extends keyof S & string>(table: T, id: string): Doc<S[T]> | null {
     ident(table, 'table');
     const row = run<Row>(this.storage, `SELECT * FROM t_${table} WHERE _id=?`, id)[0];
-    return row ? toDoc(row) : null;
+    return row ? toDoc<S, T>(row) : null;
   }
 
   query<T extends keyof S & string>(table: T): Query<S, T> {
@@ -50,12 +54,12 @@ export class DbReader<S extends Schema> {
     table: T,
     index: string,
     text: string,
-    options: { eq?: Record<string, unknown>; limit?: number } = {},
-  ): Doc<S[T]>[] {
+    options: { eq?: FilterValues; limit?: number } = {},
+  ): Array<Doc<S[T]>> {
     const spec = this.def(table).search?.[index];
-    if (!spec) throw new Error(`no search index "${index}" on "${table}"`);
+    if (!spec) {throw new Error(`no search index "${index}" on "${table}"`);}
     const match = ftsQuery(text);
-    if (!match) return [];
+    if (!match) {return [];}
     const { where, params } = filterSql(spec.filters ?? [], options.eq, 'f_');
     const rows = run<Row>(
       this.storage,
@@ -65,28 +69,28 @@ export class DbReader<S extends Schema> {
       ...params,
       options.limit ?? 20,
     );
-    return rows.map(toDoc);
+    return rows.map((row) => toDoc<S, T>(row));
   }
 
   /** Nearest documents by cosine similarity, highest score first. */
   vectorSearch<T extends keyof S & string>(
     table: T,
     index: string,
-    vector: readonly number[],
-    options: { eq?: Record<string, unknown>; limit?: number } = {},
-  ): { doc: Doc<S[T]>; score: number }[] {
+    vector: ReadonlyArray<number>,
+    options: { eq?: FilterValues; limit?: number } = {},
+  ): Array<{ doc: Doc<S[T]>; score: number }> {
     const spec = this.def(table).vectors?.[index];
-    if (!spec) throw new Error(`no vector index "${index}" on "${table}"`);
-    if (vector.length !== spec.dimensions) throw new Error(`vector has ${vector.length} dimensions, "${index}" needs ${spec.dimensions}`);
+    if (!spec) {throw new Error(`no vector index "${index}" on "${table}"`);}
+    if (vector.length !== spec.dimensions) {throw new Error(`vector has ${vector.length} dimensions, "${index}" needs ${spec.dimensions}`);}
     const { where, params } = filterSql(spec.filters ?? [], options.eq, 'f_');
-    const rows = run<{ rowid: number; v: ArrayBuffer | Uint8Array }>(this.storage, `SELECT rowid, v FROM ${vecTable(table, index)} WHERE 1=1 ${where}`, ...params);
+    const rows = run<{ rowid: number; v: ArrayBuffer }>(this.storage, `SELECT rowid, v FROM ${vecTable(table, index)} WHERE 1=1 ${where}`, ...params);
     const scored = rows
       .map((r) => ({ rowid: r.rowid, score: cosine(vector, toFloats(r.v)) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, options.limit ?? 10);
     return scored.flatMap(({ rowid, score }) => {
       const row = run<Row>(this.storage, `SELECT * FROM t_${table} WHERE _rowid=?`, rowid)[0];
-      return row ? [{ doc: toDoc(row) as Doc<S[T]>, score }] : [];
+      return row ? [{ doc: toDoc<S, T>(row), score }] : [];
     });
   }
 }
@@ -112,7 +116,7 @@ export class Db<S extends Schema> extends DbReader<S> {
   }
 
   private open(): void {
-    if (this.ended) throw new Error('this mutation has ended: a write after an await would land outside its transaction');
+    if (this.ended) {throw new Error('this mutation has ended: a write after an await would land outside its transaction');}
   }
 
   /** Adds an extra live topic for this call, on top of the table topics. */
@@ -127,9 +131,10 @@ export class Db<S extends Schema> extends DbReader<S> {
     const id = crypto.randomUUID();
     const creationTime = Date.now();
     run(this.storage, `INSERT INTO t_${table} (_id,_creationTime,doc) VALUES (?,?,?)`, id, creationTime, JSON.stringify(doc));
-    const rowid = run<{ _rowid: number }>(this.storage, `SELECT _rowid FROM t_${table} WHERE _id=?`, id)[0]!._rowid;
-    this.reindex(table, def, rowid, doc);
-    if (def.sync) this.changes.record(table, id, null, { ...doc, _id: id, _creationTime: creationTime });
+    const inserted = run<{ _rowid: number }>(this.storage, `SELECT _rowid FROM t_${table} WHERE _id=?`, id)[0];
+    if (!inserted) {throw new Error(`document ${id} was not written to "${table}"`);}
+    this.reindex(table, def, inserted._rowid, doc);
+    if (def.sync) {this.changes.record(table, id, null, { ...doc, _id: id, _creationTime: creationTime });}
     this.touchDoc(table, id, def, doc);
     return id;
   }
@@ -137,10 +142,11 @@ export class Db<S extends Schema> extends DbReader<S> {
   /** Shallow merge. A field set to `undefined` is removed. */
   patch<T extends keyof S & string>(table: T, id: string, fields: Partial<NewDoc<S[T]>>): void {
     const { def, row, old } = this.load(table, id);
-    const merged: Record<string, unknown> = { ...old };
-    for (const [k, v] of Object.entries(fields)) {
-      if (v === undefined) delete merged[k];
-      else merged[k] = v;
+    if (!isJsonObject(fields)) {throw new Error('a document must be an object');}
+    const merged = { ...old };
+    for (const [k, v] of Object.entries<JsonValue>(fields)) {
+      if (v === undefined) {delete merged[k];}
+      else {merged[k] = v;}
     }
     this.write(table, def, row, old, checked(def, merged));
   }
@@ -156,34 +162,34 @@ export class Db<S extends Schema> extends DbReader<S> {
     const { def, row, old } = this.load(table, id);
     run(this.storage, `DELETE FROM t_${table} WHERE _rowid=?`, row._rowid);
     this.unindex(table, def, row._rowid);
-    if (def.sync) this.changes.record(table, id, stored(row, old), null);
+    if (def.sync) {this.changes.record(table, id, stored(row, old), null);}
     this.touchDoc(table, id, def, old);
   }
 
   private load<T extends string>(table: T, id: string) {
     const def = this.def(table);
     const row = run<Row>(this.storage, `SELECT * FROM t_${table} WHERE _id=?`, id)[0];
-    if (!row) throw new Error(`no document ${id} in "${table}"`);
-    return { def, row, old: JSON.parse(row.doc) as Record<string, unknown> };
+    if (!row) {throw new Error(`no document ${id} in "${table}"`);}
+    return { def, row, old: parseDoc(row.doc) };
   }
 
-  private write(table: string, def: TableDef, row: Row, old: Record<string, unknown>, next: Record<string, unknown>) {
+  private write(table: string, def: TableDef, row: Row, old: JsonObject, next: JsonObject) {
     this.open();
     run(this.storage, `UPDATE t_${table} SET doc=? WHERE _rowid=?`, JSON.stringify(next), row._rowid);
     this.unindex(table, def, row._rowid);
     this.reindex(table, def, row._rowid, next);
-    if (def.sync) this.changes.record(table, row._id, stored(row, old), stored(row, next));
+    if (def.sync) {this.changes.record(table, row._id, stored(row, old), stored(row, next));}
     this.touchDoc(table, row._id, def, old);
     this.touchDoc(table, row._id, def, next);
   }
 
-  private touchDoc(table: string, id: string, def: TableDef, doc: Record<string, unknown>) {
+  private touchDoc(table: string, id: string, def: TableDef, doc: JsonObject) {
     this.touched.add(table);
     this.touched.add(`${table}:${id}`);
-    for (const topic of def.topics?.(doc) ?? []) this.touched.add(topic);
+    for (const topic of def.topics?.(doc) ?? []) {this.touched.add(topic);}
   }
 
-  private reindex(table: string, def: TableDef, rowid: number, doc: Record<string, unknown>) {
+  private reindex(table: string, def: TableDef, rowid: number, doc: JsonObject) {
     for (const [name, spec] of Object.entries(def.search ?? {})) {
       const filters = spec.filters ?? [];
       run(
@@ -196,22 +202,22 @@ export class Db<S extends Schema> extends DbReader<S> {
     }
     for (const [name, spec] of Object.entries(def.vectors ?? {})) {
       const vector = pick(doc, spec.field);
-      if (vector === undefined || vector === null) continue;
-      if (!Array.isArray(vector) || vector.length !== spec.dimensions) throw new Error(`"${spec.field}" must be a number[${spec.dimensions}]`);
+      if (vector === undefined || vector === null) {continue;}
+      if (!isJsonArray(vector) || vector.length !== spec.dimensions) {throw new Error(`"${spec.field}" must be a number[${spec.dimensions}]`);}
       const filters = spec.filters ?? [];
       run(
         this.storage,
         `INSERT INTO ${vecTable(table, name)} (rowid,v${filters.map((_, i) => `,f_${i}`).join('')}) VALUES (?,?${filters.map(() => ',?').join('')})`,
         rowid,
-        new Float32Array(vector).buffer,
+        vectorBytes(vector),
         ...filters.map((f) => bindable(pick(doc, f))),
       );
     }
   }
 
   private unindex(table: string, def: TableDef, rowid: number) {
-    for (const name of Object.keys(def.search ?? {})) run(this.storage, `DELETE FROM ${ftsTable(table, name)} WHERE rowid=?`, rowid);
-    for (const name of Object.keys(def.vectors ?? {})) run(this.storage, `DELETE FROM ${vecTable(table, name)} WHERE rowid=?`, rowid);
+    for (const name of Object.keys(def.search ?? {})) {run(this.storage, `DELETE FROM ${ftsTable(table, name)} WHERE rowid=?`, rowid);}
+    for (const name of Object.keys(def.vectors ?? {})) {run(this.storage, `DELETE FROM ${vecTable(table, name)} WHERE rowid=?`, rowid);}
   }
 }
 
@@ -221,21 +227,31 @@ export class Query<S extends Schema, T extends keyof S & string> {
     private readonly db: DbReader<S>,
     private readonly table: T,
     private readonly index: string | undefined,
-    private readonly conds: Cond[],
+    private readonly conds: Array<Cond>,
     private readonly direction: 'asc' | 'desc',
-    private readonly filters: ((doc: Doc<S[T]>) => boolean)[],
+    private readonly filters: Array<(doc: Doc<S[T]>) => boolean>,
   ) {}
 
-  private next(patch: { index?: string; conds?: Cond[]; direction?: 'asc' | 'desc'; filter?: (doc: Doc<S[T]>) => boolean }) {
+  private next(patch: { index?: string; conds?: Array<Cond>; direction?: 'asc' | 'desc'; filter?: (doc: Doc<S[T]>) => boolean }) {
     return new Query(this.db, this.table, patch.index ?? this.index, patch.conds ?? this.conds, patch.direction ?? this.direction, patch.filter ? [...this.filters, patch.filter] : this.filters);
   }
 
   /** Walks a declared index. Equality on a prefix of its fields, then at most one range. */
   withIndex(name: string, range?: (q: IndexRange) => IndexRange): Query<S, T> {
-    const fields = (this.db.schema[this.table] as TableDef).indexes?.[name];
-    if (!fields) throw new Error(`no index "${name}" on "${this.table}"`);
-    if (this.index) throw new Error(`a query walks one index: "${this.index}" is already set, so "${name}" can't be added`);
-    const conds: Cond[] = [];
+    const fields = this.db.schema[this.table]?.indexes?.[name];
+    if (!fields) {throw new Error(`no index "${name}" on "${this.table}"`);}
+    if (this.index) {throw new Error(`a query walks one index: "${this.index}" is already set, so "${name}" can't be added`);}
+    const conds: Array<Cond> = [];
+    const add = (field: string, op: Cond['op'], value: unknown): IndexRange => {
+      const eqs = conds.filter((c) => c.op === '=').length;
+      const rangeFieldAt = conds.find((c) => c.op !== '=')?.field;
+      if (fields[eqs] !== field && !(op !== '=' && field === rangeFieldAt)) {
+        throw new Error(`index "${name}" (${fields.join(', ')}) expects "${fields[eqs]}" next, got "${field}"`);
+      }
+      if (op === '=' && rangeFieldAt) {throw new Error(`index "${name}": equality on "${field}" after a range`);}
+      conds.push({ field, op, value });
+      return q;
+    };
     const q: IndexRange = {
       eq: (f, v) => add(f, '=', v),
       gt: (f, v) => add(f, '>', v),
@@ -243,16 +259,6 @@ export class Query<S extends Schema, T extends keyof S & string> {
       lt: (f, v) => add(f, '<', v),
       lte: (f, v) => add(f, '<=', v),
     };
-    function add(field: string, op: Cond['op'], value: unknown) {
-      const eqs = conds.filter((c) => c.op === '=').length;
-      const rangeFieldAt = conds.find((c) => c.op !== '=')?.field;
-      if (fields![eqs] !== field && !(op !== '=' && field === rangeFieldAt)) {
-        throw new Error(`index "${name}" (${fields!.join(', ')}) expects "${fields![eqs]}" next, got "${field}"`);
-      }
-      if (op === '=' && rangeFieldAt) throw new Error(`index "${name}": equality on "${field}" after a range`);
-      conds.push({ field, op, value });
-      return q;
-    }
     range?.(q);
     return this.next({ index: name, conds });
   }
@@ -266,23 +272,23 @@ export class Query<S extends Schema, T extends keyof S & string> {
     return this.next({ filter: predicate });
   }
 
-  take(n: number): Doc<S[T]>[] {
-    const out: Doc<S[T]>[] = [];
-    if (n <= 0) return out;
+  take(n: number): Array<Doc<S[T]>> {
+    const out: Array<Doc<S[T]>> = [];
+    if (n <= 0) {return out;}
     const dir = this.direction.toUpperCase();
-    const fields = this.index ? (this.db.schema[this.table] as TableDef).indexes![this.index]! : [];
+    const fields = (this.index ? this.db.schema[this.table]?.indexes?.[this.index] : undefined) ?? [];
     const order = [...fields.map((f) => `${fieldSql(f)} ${dir}`), `_rowid ${dir}`].join(',');
     const where = this.conds.map((c) => `${fieldSql(c.field)} ${c.op === '=' && (c.value === null || c.value === undefined) ? 'IS' : c.op} ?`);
     const sql = `SELECT * FROM t_${this.table}${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY ${order}`;
-    for (const row of this.db.storage.sql.exec(sql, ...this.conds.map((c) => bindable(c.value))) as Iterable<Row>) {
-      const doc = toDoc(row) as Doc<S[T]>;
-      if (this.filters.every((f) => f(doc))) out.push(doc);
-      if (out.length >= n) break;
+    for (const row of this.db.storage.sql.exec<Row>(sql, ...this.conds.map((c) => bindable(c.value)))) {
+      const doc = toDoc<S, T>(row);
+      if (this.filters.every((f) => f(doc))) {out.push(doc);}
+      if (out.length >= n) {break;}
     }
     return out;
   }
 
-  collect(): Doc<S[T]>[] {
+  collect(): Array<Doc<S[T]>> {
     return this.take(Infinity);
   }
 
@@ -293,7 +299,7 @@ export class Query<S extends Schema, T extends keyof S & string> {
   /** The only match, null for none, and an error for more than one. */
   unique(): Doc<S[T]> | null {
     const [a, b] = this.take(2);
-    if (b) throw new Error(`unique() found more than one document in "${this.table}"`);
+    if (b) {throw new Error(`unique() found more than one document in "${this.table}"`);}
     return a ?? null;
   }
 }
@@ -312,7 +318,7 @@ export function syncSchema(storage: DataStorage, schema: Schema): void {
   const signature = schemaSignature(schema);
   storage.transactionSync(() => {
     run(storage, `CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-    if (run<{ value: string }>(storage, `SELECT value FROM _meta WHERE key='schema'`)[0]?.value === signature) return;
+    if (run<{ value: string }>(storage, `SELECT value FROM _meta WHERE key='schema'`)[0]?.value === signature) {return;}
     distinctNames(schema);
     dropRemoved(storage, schema);
     for (const [table, def] of Object.entries(schema)) {
@@ -329,15 +335,17 @@ export function syncSchema(storage: DataStorage, schema: Schema): void {
       }
       // Decision: match on the index's own table. A name pattern for `message` also fits the indexes of `message_reaction`.
       const existing = run<{ name: string }>(storage, `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND name GLOB 'i_*'`, `t_${table}`);
-      for (const { name } of existing) if (!wanted.has(name)) run(storage, `DROP INDEX ${name}`);
-      for (const sql of wanted.values()) run(storage, sql);
+      for (const { name } of existing) {
+        if (!wanted.has(name)) {run(storage, `DROP INDEX ${name}`);}
+      }
+      for (const sql of wanted.values()) {run(storage, sql);}
 
       for (const [name, spec] of Object.entries(def.search ?? {})) {
         const filters = spec.filters ?? [];
         derived(storage, table, `fts:${name}`, JSON.stringify(spec), ftsTable(table, name), () => {
           run(storage, `CREATE VIRTUAL TABLE ${ftsTable(table, name)} USING fts5(text${filters.map((_, i) => `, f_${i} UNINDEXED`).join('')})`);
           for (const row of run<Row>(storage, `SELECT * FROM t_${table}`)) {
-            const doc = JSON.parse(row.doc);
+            const doc = parseDoc(row.doc);
             run(
               storage,
               `INSERT INTO ${ftsTable(table, name)} (rowid,text${filters.map((_, i) => `,f_${i}`).join('')}) VALUES (?,?${filters.map(() => ',?').join('')})`,
@@ -353,15 +361,15 @@ export function syncSchema(storage: DataStorage, schema: Schema): void {
         derived(storage, table, `vec:${name}`, JSON.stringify(spec), vecTable(table, name), () => {
           run(storage, `CREATE TABLE ${vecTable(table, name)} (rowid INTEGER PRIMARY KEY, v BLOB NOT NULL${filters.map((_, i) => `, f_${i}`).join('')})`);
           for (const row of run<Row>(storage, `SELECT * FROM t_${table}`)) {
-            const doc = JSON.parse(row.doc);
+            const doc = parseDoc(row.doc);
             const vector = pick(doc, spec.field);
             // Decision: a stored vector of another length is left out of the index. Refusing it here would stop the object from starting.
-            if (!Array.isArray(vector) || vector.length !== spec.dimensions) continue;
+            if (!isJsonArray(vector) || vector.length !== spec.dimensions) {continue;}
             run(
               storage,
               `INSERT INTO ${vecTable(table, name)} (rowid,v${filters.map((_, i) => `,f_${i}`).join('')}) VALUES (?,?${filters.map(() => ',?').join('')})`,
               row._rowid,
-              new Float32Array(vector).buffer,
+              vectorBytes(vector),
               ...filters.map((f) => bindable(pick(doc, f))),
             );
           }
@@ -384,23 +392,24 @@ function distinctNames(schema: Schema): void {
   const seen = new Map<string, string>();
   const claim = (sqlName: string, what: string) => {
     const other = seen.get(sqlName);
-    if (other) throw new Error(`${what} and ${other} would share the name "${sqlName}": rename one of them`);
+    if (other) {throw new Error(`${what} and ${other} would share the name "${sqlName}": rename one of them`);}
     seen.set(sqlName, what);
   };
   for (const [table, def] of Object.entries(schema)) {
-    for (const [name, fields] of Object.entries(def.indexes ?? {})) claim(`i_${table}_${name}_${hash(fields.join(','))}`, `index "${name}" on "${table}"`);
-    for (const name of Object.keys(def.search ?? {})) claim(`fts_${table}_${name}`, `search index "${name}" on "${table}"`);
-    for (const name of Object.keys(def.vectors ?? {})) claim(`vec_${table}_${name}`, `vector index "${name}" on "${table}"`);
+    for (const [name, fields] of Object.entries(def.indexes ?? {})) {claim(`i_${table}_${name}_${hash(fields.join(','))}`, `index "${name}" on "${table}"`);}
+    for (const name of Object.keys(def.search ?? {})) {claim(`fts_${table}_${name}`, `search index "${name}" on "${table}"`);}
+    for (const name of Object.keys(def.vectors ?? {})) {claim(`vec_${table}_${name}`, `vector index "${name}" on "${table}"`);}
   }
 }
 
 // Decision: a search or vector table the schema no longer has is dropped, so one that comes back later is built again from the documents.
 function dropRemoved(storage: DataStorage, schema: Schema): void {
   for (const { key } of run<{ key: string }>(storage, `SELECT key FROM _meta WHERE key LIKE '%/fts:%' OR key LIKE '%/vec:%'`)) {
-    const [table, rest] = key.split('/') as [string, string];
-    const [kind, name] = rest.split(':') as ['fts' | 'vec', string];
+    const [table = '', rest = ''] = key.split('/');
+    const [kind, name = ''] = rest.split(':');
+    if (kind !== 'fts' && kind !== 'vec') {continue;}
     const def = schema[table];
-    if (kind === 'fts' ? def?.search?.[name] : def?.vectors?.[name]) continue;
+    if (kind === 'fts' ? def?.search?.[name] : def?.vectors?.[name]) {continue;}
     run(storage, `DROP TABLE IF EXISTS ${kind === 'fts' ? ftsTable(table, name) : vecTable(table, name)}`);
     run(storage, `DELETE FROM _meta WHERE key=?`, key);
   }
@@ -409,42 +418,53 @@ function dropRemoved(storage: DataStorage, schema: Schema): void {
 function derived(storage: DataStorage, table: string, key: string, signature: string, name: string, build: () => void) {
   const metaKey = `${table}/${key}`;
   const stored = run<{ value: string }>(storage, `SELECT value FROM _meta WHERE key=?`, metaKey)[0]?.value;
-  if (stored === signature) return;
+  if (stored === signature) {return;}
   run(storage, `DROP TABLE IF EXISTS ${name}`);
   build();
   run(storage, `INSERT OR REPLACE INTO _meta (key,value) VALUES (?,?)`, metaKey, signature);
 }
 
-function stored(row: Row, doc: Record<string, unknown>): Record<string, unknown> {
+function stored(row: Row, doc: JsonObject) {
   return { ...doc, _id: row._id, _creationTime: row._creationTime };
 }
 
-function toDoc(row: Row): any {
-  return { ...JSON.parse(row.doc), _id: row._id, _creationTime: row._creationTime };
+function toDoc<S extends Schema, T extends keyof S & string>(row: Row): Doc<S[T]> {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the table's document type comes from the schema generic, and writes are checked
+  return { ...parseDoc(row.doc), _id: row._id, _creationTime: row._creationTime } as Doc<S[T]>;
 }
 
-function checked(def: TableDef, value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('a document must be an object');
-  for (const k of SYSTEM) if (k in value) throw new Error(`"${k}" is set by the database`);
-  if (!def.schema) return value as Record<string, unknown>;
+function checked(def: TableDef, value: unknown): JsonObject {
+  if (!isJsonObject(value)) {throw new Error('a document must be an object');}
+  for (const k of SYSTEM) {
+    if (k in value) {throw new Error(`"${k}" is set by the database`);}
+  }
+  if (!def.schema) {return value;}
   const result = def.schema['~standard'].validate(value);
-  if (result instanceof Promise) throw new Error('table schemas must validate synchronously');
-  if (result.issues) throw new Error(`invalid document: ${result.issues.map((i) => i.message).join('; ')}`);
-  return result.value as Record<string, unknown>;
+  if ('then' in result) {throw new Error('table schemas must validate synchronously');}
+  if (result.issues) {throw new Error(`invalid document: ${result.issues.map((i) => i.message).join('; ')}`);}
+  if (!isJsonObject(result.value)) {throw new Error('a document must be an object');}
+  return result.value;
 }
 
-function pick(doc: Record<string, unknown>, path: string): unknown {
-  let cur: any = doc;
-  for (const key of path.split('.')) cur = cur?.[key];
+function vectorBytes(vector: ReadonlyArray<JsonValue>): ArrayBufferLike {
+  return Float32Array.from(vector, Number).buffer;
+}
+
+function pick(doc: JsonObject, path: string): JsonValue {
+  let cur: JsonValue = doc;
+  for (const key of path.split('.')) {
+    if (typeof cur !== 'object' || cur === null) {return undefined;}
+    cur = isJsonObject(cur) ? cur[key] : cur[Number(key)];
+  }
   return cur;
 }
 
-function filterSql(declared: readonly string[], eq: Record<string, unknown> | undefined, prefix: string) {
+function filterSql(declared: ReadonlyArray<string>, eq: FilterValues | undefined, prefix: string) {
   let where = '';
-  const params: unknown[] = [];
+  const params: Array<unknown> = [];
   for (const [field, value] of Object.entries(eq ?? {})) {
     const i = declared.indexOf(field);
-    if (i < 0) throw new Error(`"${field}" is not a filter of this index (${declared.join(', ') || 'none'})`);
+    if (i < 0) {throw new Error(`"${field}" is not a filter of this index (${declared.join(', ') || 'none'})`);}
     where += ` AND ${prefix}${i} ${value === null || value === undefined ? 'IS' : '='} ?`;
     params.push(bindable(value));
   }
@@ -458,18 +478,20 @@ export function ftsQuery(text: string): string {
 }
 
 function toFloats(v: ArrayBuffer | Uint8Array): Float32Array {
-  const bytes = v instanceof Uint8Array ? v : new Uint8Array(v);
+  const bytes = ArrayBuffer.isView(v) ? v : new Uint8Array(v);
   return new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
 }
 
-function cosine(a: readonly number[], b: Float32Array): number {
+function cosine(a: ReadonlyArray<number>, b: Float32Array): number {
   let dot = 0;
   let na = 0;
   let nb = 0;
   for (let i = 0; i < a.length; i++) {
-    dot += a[i]! * b[i]!;
-    na += a[i]! * a[i]!;
-    nb += b[i]! * b[i]!;
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
   }
   return na && nb ? dot / Math.sqrt(na * nb) : 0;
 }

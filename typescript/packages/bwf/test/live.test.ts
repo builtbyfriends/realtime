@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineData, defineSchema, table } from '@builtbyfriends/realtime-data';
 import { createLive } from '@builtbyfriends/realtime-live';
 import { publishTopics, topicPolicy } from '../src/data.js';
-import { bwfTransport, fetchEventSource, type ConnectLiveStream } from '../src/live.js';
+import { bwfTransport, fetchEventSource } from '../src/live.js';
+import type { ConnectLiveStream } from '../src/live.js';
 import { memoryStorage } from '../../data/test/storage.js';
 
 function fakeHost() {
   const subs = new Map<string, Map<string, (event: any) => void>>();
-  let sources: any[] = [];
+  const sources: Array<any> = [];
   const connect: ConnectLiveStream = (_url, options) => {
     const open = () => {
       const source = new options!.eventSource!('/live?connectionId=x', { withCredentials: true });
@@ -17,7 +18,7 @@ function fakeHost() {
     open();
     return {
       subscribe: async ({ id, topic, onEvent }) => {
-        (subs.get(topic) ?? subs.set(topic, new Map()).get(topic)!).set(id, onEvent!);
+        (subs.get(topic) ?? subs.set(topic, new Map()).get(topic)!).set(id, onEvent);
         return async () => void subs.get(topic)!.delete(id);
       },
       close: () => {},
@@ -56,7 +57,7 @@ describe('bwfTransport', () => {
     const stopA = await t.subscribe('x', a);
     await t.subscribe('y', b);
     expect(connect).toHaveBeenCalledTimes(1);
-    expect(connect.mock.calls[0]![1]).toMatchObject({ keepOpen: true, withCredentials: true });
+    expect(connect.mock.calls[0][1]).toMatchObject({ keepOpen: true, withCredentials: true });
     v.publish('x');
     expect([a.mock.calls.length, b.mock.calls.length]).toEqual([1, 0]);
     stopA();
@@ -72,10 +73,10 @@ describe('bwfTransport', () => {
     expect(v.count('x')).toBe(1);
     v.publish('x');
     expect(heard).toHaveBeenCalledTimes(300);
-    for (const stop of stops.slice(1)) stop();
+    for (const stop of stops.slice(1)) {stop();}
     await Promise.resolve();
     expect(v.count('x')).toBe(1);
-    stops[0]!();
+    stops[0]();
     await Promise.resolve();
     expect(v.count('x')).toBe(0);
     await t.subscribe('x', heard);
@@ -132,7 +133,7 @@ describe('bwfTransport with headers', () => {
     const headers = () => ({ authorization: 'Bearer t1' });
     const t = bwfTransport({ connect, headers });
     await t.subscribe('x', () => {});
-    const options = connect.mock.calls[0]![1]!;
+    const options = connect.mock.calls[0][1]!;
     expect(options.headers).toBe(headers);
     expect(options.withCredentials).toBe(false);
     expect(options.eventSource).toBeDefined();
@@ -152,10 +153,10 @@ describe('fetchEventSource', () => {
 
   it('sends headers, then emits open, message frames and a final error when the stream ends', async () => {
     const fetchMock = vi.fn(async () => sse(': connected\n\nevent: message\ndata: {"topic":"a"}\n\ndata: x\r\ndata: y\r\n\n'));
-    const Source = fetchEventSource({ headers: async () => ({ authorization: 'Bearer t' }), fetch: fetchMock as any });
-    const seen: string[] = [];
+    const Source = fetchEventSource({ headers: async () => ({ authorization: 'Bearer t' }), fetch: fetchMock });
+    const seen: Array<string> = [];
     const source = new Source('/live?connectionId=c');
-    for (const type of ['open', 'message', 'error']) source.addEventListener(type, (e: any) => seen.push(e.data ? `${type}:${e.data}` : type));
+    for (const type of ['open', 'message', 'error']) {source.addEventListener(type, (e: any) => seen.push(e.data ? `${type}:${e.data}` : type));}
     await vi.waitFor(() => expect(seen).toContain('error'));
     expect(seen).toEqual(['open', 'message:{"topic":"a"}', 'message:x\ny', 'error']);
     const [url, init] = fetchMock.mock.calls[0] as any;
@@ -165,16 +166,16 @@ describe('fetchEventSource', () => {
   });
 
   it('reports an error for a refused stream', async () => {
-    const Source = fetchEventSource({ headers: {}, fetch: (async () => new Response('no', { status: 401 })) as any });
+    const Source = fetchEventSource({ headers: {}, fetch: (async () => new Response('no', { status: 401 })) });
     const source = new Source('/live');
     const error = vi.fn();
     source.addEventListener('error', error);
     await vi.waitFor(() => expect(error).toHaveBeenCalledTimes(1));
-    expect(error.mock.calls[0]![0].error).toMatchObject({ status: 401 });
+    expect(error.mock.calls[0][0].error).toMatchObject({ status: 401 });
   });
 
   it('reports a headers error to a listener added right after the constructor', async () => {
-    const Source = fetchEventSource({ headers: { authorization: 'Bearer a\nb' }, fetch: (async () => sse('')) as any });
+    const Source = fetchEventSource({ headers: { authorization: 'Bearer a\nb' }, fetch: (async () => sse('')) });
     const error = vi.fn();
     new Source('/live').addEventListener('error', error);
     await vi.waitFor(() => expect(error).toHaveBeenCalledTimes(1));
@@ -185,12 +186,12 @@ describe('fetchEventSource', () => {
       headers: {},
       fetch: (() => {
         throw new TypeError('bad url');
-      }) as any,
+      }),
     });
     const error = vi.fn();
     new Source('/live').addEventListener('error', error);
     await vi.waitFor(() => expect(error).toHaveBeenCalledTimes(1));
-    expect(error.mock.calls[0]![0].error).toBeInstanceOf(TypeError);
+    expect(error.mock.calls[0][0].error).toBeInstanceOf(TypeError);
   });
 });
 
@@ -232,7 +233,7 @@ describe('topicPolicy', () => {
 
 describe('publishTopics', () => {
   it('publishes only the topics `only` lets through, and nothing when none are left', async () => {
-    const published: string[] = [];
+    const published: Array<string> = [];
     const withEnv = vi.fn(() => ({ publish: async (topic: string) => void published.push(topic) }));
     const onCommit = publishTopics({ withEnv }, { only: (t) => t.startsWith('messages:channel:') });
     await onCommit(['messages', 'messages:1', 'messages:channel:a'], {});
@@ -245,7 +246,7 @@ describe('publishTopics', () => {
 describe('data layer to live query, end to end', () => {
   it('a mutation commits, its topics publish, and a watching query refetches the new rows', async () => {
     const v = fakeHost();
-    const published: string[] = [];
+    const published: Array<string> = [];
     const live = {
       withEnv: () => ({
         publish: async (topic: string) => {

@@ -44,9 +44,9 @@ const clashing = procedure('links.add')
 
 const registry = defineRegistry([getContact, purge, ping, search, flagged, clashing], { analytics: memoryAnalytics() });
 const rpc = rpcHandler(registry);
-const f: typeof fetch = async (input, init) => rpc(new Request(input as string, init), env, { waitUntil: () => {} });
+const f: typeof fetch = async (input, init) => rpc(new Request(input, init), env, { waitUntil: () => {} });
 
-async function cli(...argv: string[]) {
+async function cli(...argv: Array<string>) {
   let out = '';
   let err = '';
   const code = await run({ argv, env: { REALTIME_URL: 'https://api.test', REALTIME_TOKEN: 'bob' }, fetch: f, stdout: (s) => (out += s), stderr: (s) => (err += s) });

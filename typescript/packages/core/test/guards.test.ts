@@ -2,17 +2,20 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { anyOf, bearerAuth, defineRegistry } from '@builtbyfriends/realtime';
 import { memoryAnalytics } from '@builtbyfriends/realtime-analytics';
-import { env, procedure, req, type Env, type User } from './fixtures.js';
+import { env, procedure, req } from './fixtures.js';
+import type { Env, User } from './fixtures.js';
 
 const shaky = bearerAuth<User, Env>({
   name: 'shaky',
-  verify: (t, e) => (Object.hasOwn(e.tokens, t) ? e.tokens[t]! : null),
+  verify: (t, e) => (Object.hasOwn(e.tokens, t) ? e.tokens[t] : null),
   actorId: () => {
     throw new Error('no id');
   },
 });
 
-const throwingSchema = { '~standard': { version: 1, vendor: 'test', validate: () => { throw new Error('schema broke'); } } } as unknown as z.ZodType<{ n: number }>;
+const throwingSchema = z.unknown().transform((): { n: number } => {
+  throw new Error('schema broke');
+});
 
 const base = (name: string) =>
   procedure(name)
@@ -28,7 +31,7 @@ function setup() {
     .noInput()
     .output(z.object({ saved: z.boolean() }))
     .noErrors({ reason: 'This test procedure raises no errors' })
-    .analytics({ event: 'thing.saved', props: () => ({ big: 1n as unknown as number }) })
+    .analytics({ event: 'thing.saved', props: () => ({ big: 1n }) })
     .handler(() => (wrote(), { saved: true }));
   const check = base('things.check')
     .input(throwingSchema)
@@ -45,7 +48,7 @@ function setup() {
 describe('callbacks that throw', () => {
   it('answers a call that already wrote, when the actor id or the analytics props can\'t be read', async () => {
     const { call, onError, wrote, registry } = setup();
-    const stop = registry.trace!.subscribe(() => {});
+    const stop = registry.trace.subscribe(() => {});
     expect(await call('things.save')).toEqual({ ok: true, status: 200, value: { saved: true } });
     stop();
     expect(wrote).toHaveBeenCalledTimes(1);
@@ -67,6 +70,6 @@ describe('anyOf', () => {
     const key = { name: 'key', resolve: async () => ({ key: { owner: 'u-1' } }), actorId: (c: Session | Key) => (c as Key).key.owner };
     const either = anyOf<Session | Key>('either', session, key);
     const ctx = await either.resolve(req(), env);
-    expect(either.actorId!(ctx!)).toBe('u-1');
+    expect(either.actorId!(ctx)).toBe('u-1');
   });
 });

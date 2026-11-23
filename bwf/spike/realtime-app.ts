@@ -17,7 +17,10 @@ export const whoami = procedure('whoami')
   .cli({ command: 'whoami', description: 'Print the caller' })
   .noAiTool({ reason: 'Spike only tests the HTTP path' })
   .handler(({ ctx }) => ({ id: ctx.id, orgId: ctx.orgId }));
-const procs: any[] = [whoami];
-if (process.env.REALTIME_BROKEN) procs.push((procedure('broken') as any).noInput());
+// oxlint-disable-next-line typescript/no-explicit-any -- spike: the list mixes in a deliberately incomplete procedure
+const procs: Array<any> = [whoami];
+// oxlint-disable-next-line typescript/no-explicit-any -- spike: a deliberately incomplete procedure
+if (process.env.REALTIME_BROKEN) {procs.push((procedure('broken') as any).noInput());}
+// oxlint-disable-next-line typescript/no-explicit-any -- spike: the list mixes in a deliberately incomplete procedure
 export const registry = defineRegistry(procs as any, { analytics: analyticsEngine({ binding: 'ANALYTICS' }) });
 export const rpc = rpcHandler(registry);

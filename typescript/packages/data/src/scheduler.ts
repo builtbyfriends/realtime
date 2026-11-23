@@ -1,4 +1,5 @@
-import { run, type DataStorage } from './storage.js';
+import { run } from './storage.js';
+import type { DataStorage } from './storage.js';
 
 export type ScheduledJob = { id: string; name: string; args: unknown; runAt: number; status: 'pending' | 'failed'; attempts: number; error: string | null };
 
@@ -7,7 +8,7 @@ type Row = { id: string; name: string; args: string; run_at: number; status: 'pe
 export function syncJobs(storage: DataStorage): void {
   run(storage, `CREATE TABLE IF NOT EXISTS _jobs (id TEXT PRIMARY KEY, name TEXT NOT NULL, args TEXT NOT NULL, run_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, error TEXT)`);
   run(storage, `CREATE INDEX IF NOT EXISTS _jobs_due ON _jobs (status, run_at)`);
-  if (!run<{ name: string }>(storage, `SELECT name FROM pragma_table_info('_jobs')`).some((c) => c.name === 'cut_short')) run(storage, `ALTER TABLE _jobs ADD COLUMN cut_short INTEGER NOT NULL DEFAULT 0`);
+  if (!run<{ name: string }>(storage, `SELECT name FROM pragma_table_info('_jobs')`).some((c) => c.name === 'cut_short')) {run(storage, `ALTER TABLE _jobs ADD COLUMN cut_short INTEGER NOT NULL DEFAULT 0`);}
 }
 
 /**
@@ -36,7 +37,7 @@ export class Scheduler {
   }
 
   runAt(at: number | Date, name: string, args: unknown = null, options: { id?: string } = {}): string {
-    if (!this.knows(name)) throw new Error(`no job named "${name}"`);
+    if (!this.knows(name)) {throw new Error(`no job named "${name}"`);}
     const id = options.id ?? crypto.randomUUID();
     run(
       this.storage,
@@ -54,7 +55,7 @@ export class Scheduler {
   /** Cancels a job that has not run yet. Returns whether there was one. */
   cancel(id: string): boolean {
     const gone = run(this.storage, `DELETE FROM _jobs WHERE id=? RETURNING id`, id).length > 0;
-    if (gone) this.changed = true;
+    if (gone) {this.changed = true;}
     return gone;
   }
 
@@ -64,7 +65,7 @@ export class Scheduler {
   }
 
   /** @internal */
-  due(now: number, limit: number): ScheduledJob[] {
+  due(now: number, limit: number): Array<ScheduledJob> {
     return run<Row>(this.storage, `SELECT * FROM _jobs WHERE status='pending' AND run_at<=? ORDER BY run_at, rowid LIMIT ?`, now, limit).map(toJob);
   }
 
@@ -95,8 +96,8 @@ export class Scheduler {
   /** @internal Retries with exponential backoff, then parks the job as failed. */
   fail(job: ScheduledJob, error: string, maxAttempts: number, now: number): void {
     const attempts = job.attempts + 1;
-    if (attempts >= maxAttempts) run(this.storage, `UPDATE _jobs SET status='failed', attempts=?, error=? WHERE id=? AND run_at=?`, attempts, error, job.id, job.runAt);
-    else run(this.storage, `UPDATE _jobs SET run_at=?, attempts=?, error=?, cut_short=0 WHERE id=? AND run_at=?`, now + Math.min(2 ** attempts * 1000, 5 * 60_000), attempts, error, job.id, job.runAt);
+    if (attempts >= maxAttempts) {run(this.storage, `UPDATE _jobs SET status='failed', attempts=?, error=? WHERE id=? AND run_at=?`, attempts, error, job.id, job.runAt);}
+    else {run(this.storage, `UPDATE _jobs SET run_at=?, attempts=?, error=?, cut_short=0 WHERE id=? AND run_at=?`, now + Math.min(2 ** attempts * 1000, 5 * 60_000), attempts, error, job.id, job.runAt);}
   }
 }
 
