@@ -129,7 +129,7 @@ fun liveBackoffMillis(attempt: Int): Long = minOf(1_000L shl attempt.coerceIn(0,
 
 /** What can go wrong talking to a live stream. */
 sealed class LiveException(message: String) : Exception(message) {
-    class Unauthorized : LiveException("live: the server answered 401")
+    class Unauthorized(val status: Int = 401) : LiveException("live: the server answered $status")
     class Status(val status: Int) : LiveException("live: the server answered $status")
 
     /** The server refused the request as a whole. */
