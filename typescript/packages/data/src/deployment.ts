@@ -219,7 +219,7 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
     client(namespace, name = 'main') {
       const stub = (): Stub => namespace.get(namespace.idFromName(name));
       const group = (kind: 'query' | 'mutation') =>
-        new Proxy({}, { get: (_, fn) => (typeof fn === 'string' ? (args?: unknown) => stub().run(kind, fn, args) : undefined) });
+        new Proxy({}, { get: (_, fn) => (typeof fn === 'string' && fn !== 'then' ? (args?: unknown) => stub().run(kind, fn, args) : undefined) });
       return { query: group('query'), mutate: group('mutation'), job: (id: string) => stub().job(id) } as DataClient<F>;
     },
   };
@@ -432,12 +432,28 @@ export class Engine {
   }
 
   private dataClient(): DataClient<any> {
-    const call = (kind: 'query' | 'mutation') => new Proxy({}, { get: (_, fn) => (typeof fn === 'string' ? (args?: unknown) => this.run(kind, fn, args) : undefined) });
+    const call = (kind: 'query' | 'mutation') => new Proxy({}, { get: (_, fn) => (typeof fn === 'string' && fn !== 'then' ? (args?: unknown) => this.run(kind, fn, args) : undefined) });
     return { query: call('query'), mutate: call('mutation'), job: async (id: string) => this.scheduler().get(id) } as DataClient<any>;
   }
 
   private async afterCommit(touched: Set<string>, queueChanged: boolean, batch: ChangeBatch | null = null): Promise<void> {
-    if (queueChanged) await this.arm(this.scheduler());
+    // Decision: the write is committed, so devices hear about it even when the alarm can't be set. The caller still gets the error.
+    try {
+      if (queueChanged) await this.arm(this.scheduler());
+    } finally {
+      this.fanOut(touched, batch);
+    }
+  }
+
+  private fanOut(touched: Set<string>, batch: ChangeBatch | null): void {
+    // Decision: access is checked again before the commit goes out, so a reader the commit removed doesn't get what it wrote.
+    if (touched.size && this.rechecks.length) {
+      try {
+        if (this.def.syncRecheck?.([...touched])) for (const fn of this.rechecks) fn();
+      } catch (e) {
+        console.error('sync recheck failed', e);
+      }
+    }
     if (batch) for (const fn of this.listeners) {
       try {
         fn(batch);
@@ -450,13 +466,6 @@ export class Engine {
         fn([...touched]);
       } catch (e) {
         console.error('topic listener failed', e);
-      }
-    }
-    if (touched.size && this.rechecks.length && this.def.syncRecheck?.([...touched])) for (const fn of this.rechecks) {
-      try {
-        fn();
-      } catch (e) {
-        console.error('sync recheck failed', e);
       }
     }
     if (batch && this.def.onChanges) {

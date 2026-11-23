@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { defineData, defineSchema, SyncSockets, table } from '../src/index.js';
 import { memoryStorage } from './storage.js';
 
@@ -24,7 +24,8 @@ function setup() {
 function fakeSocket() {
   let attachment: unknown = null;
   const sent: any[] = [];
-  return { sent, send: (m: string) => void sent.push(JSON.parse(m)), serializeAttachment: (v: unknown) => void (attachment = v), deserializeAttachment: () => attachment };
+  const closed: number[] = [];
+  return { sent, closed, close: (code = 1000) => void closed.push(code), send: (m: string) => void sent.push(JSON.parse(m)), serializeAttachment: (v: unknown) => void (attachment = v), deserializeAttachment: () => attachment };
 }
 
 describe('sync sockets', () => {
@@ -214,16 +215,17 @@ describe('live queries over the socket', () => {
     });
     const engine = data.engine(memoryStorage());
     engine.init();
+    const runs: string[] = [];
     const all: ReturnType<typeof fakeSocket>[] = [];
     const sockets = new SyncSockets(
       { acceptWebSocket: (ws: any) => void all.push(ws), getWebSockets: () => all },
-      { pull: (_a, g, after, l) => engine.pull(g, after, l), topicAccess: (a, t) => engine.topicAccess(a, t), query: (a, n, i) => engine.liveQuery(a, n, i) },
+      { pull: (_a, g, after, l) => engine.pull(g, after, l), topicAccess: (a, t) => engine.topicAccess(a, t), query: (a, n, i) => (runs.push(a), engine.liveQuery(a, n, i)) },
     );
     engine.onTopics((t) => sockets.publish(t));
     engine.onRecheck(() => sockets.recheck());
     const m = (name: string, args: unknown) => engine.run('mutation', name, args);
     const tick = () => new Promise((r) => setTimeout(r, 0));
-    return { sockets, m, tick };
+    return { sockets, m, tick, runs };
   }
 
   it('answers a live query, answers again after a commit that touches it, and stops once access goes', async () => {
@@ -255,6 +257,23 @@ describe('live queries over the socket', () => {
     expect(a.sent).toHaveLength(count);
   });
 
+  it('runs a query once for one actor\'s sockets that ask the same thing', async () => {
+    const { sockets, m, tick, runs } = setup();
+    await m('join', { room: 'x', user: 'ann' });
+    await m('join', { room: 'x', user: 'bo' });
+    const mine = [fakeSocket(), fakeSocket(), fakeSocket()];
+    mine.forEach((ws, i) => {
+      sockets.accept(ws, { actor: i === 2 ? 'bo' : 'ann', groups: [] });
+      sockets.message(ws, JSON.stringify({ type: 'query', id: 'q', name: 'pins.list', input: { room: 'x' }, topics: ['pins:room:x'] }));
+    });
+    await tick();
+    runs.length = 0;
+    await m('pin', { room: 'x', text: 'one' });
+    await tick();
+    expect(runs).toEqual(['ann', 'bo']);
+    for (const ws of mine) expect(ws.sent.at(-1)).toEqual({ type: 'result', id: 'q', value: [{ text: 'one' }] });
+  });
+
   it('sends nothing when the answer is the same, and stops after unquery', async () => {
     const { sockets, m, tick } = setup();
     await m('join', { room: 'x', user: 'ann' });
@@ -272,5 +291,145 @@ describe('live queries over the socket', () => {
     await m('pin', { room: 'x', text: 'one' });
     await tick();
     expect(a.sent).toHaveLength(2);
+  });
+});
+
+describe('sockets that go wrong', () => {
+  type Note = { room: string; text: string };
+  const schema = defineSchema({
+    notes: table<Note>({
+      sync: {
+        group: (n) => `room:${n.room}`,
+        view: (n, { actor }) => {
+          if (actor === 'bad' && n.text === 'boom') throw new Error('view failed');
+          return { text: n.text };
+        },
+      },
+    }),
+  });
+
+  function setup() {
+    const data = defineData({ schema, functions: ({ mutation }) => ({ add: mutation((ctx, a: Note) => ctx.db.insert('notes', a)) }), syncAccess: () => true });
+    const storage = memoryStorage();
+    const engine = data.engine(storage);
+    engine.init();
+    const all: { tags: string[]; ws: ReturnType<typeof fakeSocket> }[] = [];
+    const state = {
+      acceptWebSocket: (ws: any, tags: string[] = []) => void all.push({ ws, tags }),
+      getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
+    };
+    const sockets = new SyncSockets(state, { pull: (_a, g, after, l) => engine.pull(g, after, l), view: (a, c) => engine.view(a, c), access: (a, g) => engine.access(a, g) });
+    engine.listen((batch) => sockets.broadcast(batch));
+    return { sockets, storage, add: (room: string, text: string) => engine.run('mutation', 'add', { room, text }) };
+  }
+
+  it('closes the socket whose view threw, and still sends the commit to the sockets after it', async () => {
+    const { sockets, add } = setup();
+    const bad = fakeSocket();
+    const good = fakeSocket();
+    sockets.accept(bad, { actor: 'bad', groups: ['room:x'] });
+    sockets.accept(good, { actor: 'ann', groups: ['room:x'] });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await add('x', 'boom');
+    logged.mockRestore();
+    expect(bad.closed).toEqual([1011]);
+    expect(bad.sent).toEqual([]);
+    expect(good.sent).toMatchObject([{ type: 'changes', seq: 1, changes: [{ doc: { text: 'boom' } }] }]);
+  });
+
+  it('closes the socket when answering its message throws, and takes the message as its own', async () => {
+    const { sockets, add } = setup();
+    await add('x', 'boom');
+    const bad = fakeSocket();
+    sockets.accept(bad, { actor: 'bad', groups: ['room:x'] });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(sockets.message(bad, JSON.stringify({ type: 'pull', after: 0, id: 1 }))).toBe(true);
+    logged.mockRestore();
+    expect(bad.closed).toEqual([1011]);
+  });
+
+  it('answers a pull whatever limit the device sends', async () => {
+    const { sockets, add } = setup();
+    for (let i = 0; i < 3; i++) await add('x', `n${i}`);
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: ['room:x'] });
+    for (const limit of [-1, 0, 'many', 1e12, null, 2.5]) sockets.message(a, JSON.stringify({ type: 'pull', after: 0, id: 1, limit }));
+    expect(a.closed).toEqual([]);
+    expect(a.sent.map((m) => m.changes.length)).toEqual([3, 3, 3, 3, 3, 2]);
+    expect(a.sent[5]).toMatchObject({ seq: 2, more: true });
+  });
+
+  it('pulls for a socket in more groups than one statement takes parameters', async () => {
+    const { sockets, add } = setup();
+    await add('r7', 'seven');
+    await add('r149', 'last');
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: [] });
+    const groups = Array.from({ length: 150 }, (_, i) => `room:r${i}`);
+    sockets.message(a, JSON.stringify({ type: 'watch', groups, after: 0, id: 1 }));
+    expect(a.closed).toEqual([]);
+    expect(a.sent[0]).toMatchObject({ type: 'watching', seq: 2, changes: [{ doc: { text: 'seven' } }, { doc: { text: 'last' } }] });
+    expect(a.sent[0].groups).toHaveLength(150);
+  });
+
+  it('splits a pull that would not fit in one message', async () => {
+    const { sockets, add } = setup();
+    const big = 'x'.repeat(400_000);
+    for (let i = 0; i < 4; i++) await add('x', big);
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: ['room:x'] });
+    sockets.message(a, JSON.stringify({ type: 'pull', after: 0, id: 1 }));
+    expect(a.sent[0]).toMatchObject({ seq: 2, more: true });
+    expect(a.sent[0].changes).toHaveLength(2);
+    sockets.message(a, JSON.stringify({ type: 'pull', after: 2, id: 2 }));
+    expect(a.sent[1]).toMatchObject({ seq: 4, more: false });
+    expect(a.sent[1].changes).toHaveLength(2);
+  });
+
+  it('leaves a message that is JSON but not an object to the object', () => {
+    const { sockets } = setup();
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: [] });
+    for (const raw of ['null', '5', '"pull"', '[]', '{"type":7}']) expect(sockets.message(a, raw)).toBe(false);
+  });
+
+  it('closes a socket whose new groups do not fit, instead of stopping at it', () => {
+    const { sockets } = setup();
+    const a = fakeSocket();
+    const b = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: [] });
+    sockets.accept(b, { actor: 'ann', groups: [] });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    sockets.regroup('ann', Array.from({ length: 2000 }, (_, i) => `room:${i}-${'x'.repeat(20)}`));
+    logged.mockRestore();
+    expect(a.closed).toEqual([1011]);
+    expect(b.closed).toEqual([1011]);
+  });
+
+  it('refuses what a watch asks past the first thousand groups', () => {
+    const { sockets } = setup();
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: [] });
+    sockets.message(a, JSON.stringify({ type: 'watch', groups: Array.from({ length: 1200 }, (_, i) => `r${i}`), id: 1 }));
+    expect(a.sent[0].groups).toHaveLength(1000);
+    expect(a.sent[0].denied).toHaveLength(200);
+  });
+
+  it('still sends a commit to devices when the alarm cannot be set', async () => {
+    const data = defineData({
+      schema,
+      functions: ({ mutation }) => ({ add: mutation((ctx, a: Note) => (ctx.scheduler.runAfter(1000, 'later'), ctx.db.insert('notes', a))) }),
+      jobs: (job) => ({ later: job(() => {}) }),
+    });
+    const storage = memoryStorage();
+    storage.setAlarm = () => {
+      throw new Error('no alarm');
+    };
+    const engine = data.engine(storage);
+    engine.init();
+    const seen: number[] = [];
+    engine.listen((batch) => void seen.push(batch.seq));
+    await expect(engine.run('mutation', 'add', { room: 'x', text: 'hi' })).rejects.toThrow('no alarm');
+    expect(seen).toEqual([1]);
   });
 });

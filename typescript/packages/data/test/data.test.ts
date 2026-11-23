@@ -136,6 +136,22 @@ describe('schema sync', () => {
   });
 });
 
+describe('index clean-up', () => {
+  it('keeps the indexes of a table whose name starts with another table\'s name', async () => {
+    const { syncSchema } = await import('../src/index.js');
+    const storage = memoryStorage();
+    const indexes = () => storage.sql.exec(`SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'i\\_%' ESCAPE '\\' ORDER BY name`).toArray().map((r: { name: string }) => r.name.replace(/_[a-z0-9]+$/, ''));
+    const first = defineSchema({
+      message_reaction: table<{ message: string }>({ indexes: { by_message: ['message'] } }),
+      message: table<{ author: string; channel: string }>({ indexes: { by_author: ['author'], by_channel: ['channel'] } }),
+    });
+    syncSchema(storage, first);
+    expect(indexes()).toEqual(['i_message_by_author', 'i_message_by_channel', 'i_message_reaction_by_message']);
+    syncSchema(storage, defineSchema({ message_reaction: first.message_reaction, message: table<{ author: string; channel: string }>({ indexes: { by_author: ['author'] } }) }));
+    expect(indexes()).toEqual(['i_message_by_author', 'i_message_reaction_by_message']);
+  });
+});
+
 describe('search and vectors', () => {
   it('ranks full text matches, matches prefixes, filters by channel, and follows edits and deletes', async () => {
     const { call } = setup();

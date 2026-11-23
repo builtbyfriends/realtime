@@ -310,7 +310,8 @@ export function syncSchema(storage: DataStorage, schema: Schema): void {
         const idx = `i_${table}_${name}_${hash(fields.join(','))}`;
         wanted.set(idx, `CREATE INDEX IF NOT EXISTS ${idx} ON t_${table} (${[...fields.map(fieldSql), '_rowid'].join(',')})`);
       }
-      const existing = run<{ name: string }>(storage, `SELECT name FROM sqlite_master WHERE type='index' AND name LIKE ? ESCAPE '\\'`, `i\\_${table}\\_%`);
+      // Decision: match on the index's own table. A name pattern for `message` also fits the indexes of `message_reaction`.
+      const existing = run<{ name: string }>(storage, `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? AND name GLOB 'i_*'`, `t_${table}`);
       for (const { name } of existing) if (!wanted.has(name)) run(storage, `DROP INDEX ${name}`);
       for (const sql of wanted.values()) run(storage, sql);
 
