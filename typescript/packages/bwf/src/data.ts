@@ -41,7 +41,8 @@ export type TopicRule = {
  */
 export function topicPolicy(rules: TopicRule[]) {
   const matches = (pattern: RegExp, topic: string) => {
-    const m = pattern.exec(topic);
+    // Decision: a fresh copy without g or y, so lastIndex never carries over between calls.
+    const m = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, '')).exec(topic);
     return m && m[0] === topic ? m : null;
   };
   const policy = async (ctx: TopicContext): Promise<Response | void> => {

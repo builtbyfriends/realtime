@@ -180,7 +180,7 @@ const surfaceOf = (ex) => ex.kind === 'rpc' ? ex.surface : ex.kind === 'ai' ? 'a
 
 function journey(call) {
   const r = call.result;
-  const outcome = r.ok ? `<span class="status s2">200 ok</span>` : `<span class="status ${statusCls(r.status)}">${r.status} ${esc(r.code)}</span>`;
+  const outcome = r.ok ? `<span class="status s2">200 ok</span>` : `<span class="status ${statusCls(r.status)}">${esc(r.status)} ${esc(r.code)}</span>`;
   return `<div class="journey">
     <div class="jhead"><b class="mono">${esc(call.procedure)}</b><span class="pill ${call.surface}">${call.surface}</span>${outcome}<span class="spacer"></span><span class="mono" style="color:var(--faint)">${call.durationMs} ms</span></div>
     ${call.steps.map((s) => `<div class="step ${s.status}"><span class="ic">${ICON[s.status]}</span><span class="lbl">${LABEL[s.concern]}</span>
@@ -216,17 +216,17 @@ function renderNetwork() {
   const rows = items.map((e) => {
     const t = exTitle(e);
     const steps = e.calls.flatMap((c) => c.steps);
-    return `<div class="row" tabindex="0" data-id="${e.id}" aria-selected="${state.sel.network === e.id}">
+    return `<div class="row" tabindex="0" data-id="${esc(e.id)}" aria-selected="${state.sel.network === e.id}">
       <span class="t">${time(e.at)}</span><span class="pill ${surfaceOf(e)}">${surfaceOf(e)}</span>
       <span class="name">${esc(t.name)} <span class="sub">${esc(t.sub)}</span></span>
-      <span class="right">${e.gates.some((g) => g.gate === 'needs-approval') ? '<span class="chip wait">held for approval</span>' : ''}${e.calls[0] ? dots(e.calls[0].steps) : ''}<span class="status ${statusCls(e.status)}">${e.status ?? (e.error ? 'ERR' : '…')}</span><span class="ms">${e.ms ?? ''}${e.ms != null ? 'ms' : ''}</span></span></div>`;
+      <span class="right">${e.gates.some((g) => g.gate === 'needs-approval') ? '<span class="chip wait">held for approval</span>' : ''}${e.calls[0] ? dots(e.calls[0].steps) : ''}<span class="status ${statusCls(e.status)}">${esc(e.status ?? (e.error ? 'ERR' : '…'))}</span><span class="ms">${esc(e.ms ?? '')}${e.ms != null ? 'ms' : ''}</span></span></div>`;
   }).join('');
   $('#list').innerHTML = `<div class="filters">${filters}<input id="q" type="search" placeholder="Filter by procedure or path" value="${esc(state.q)}" aria-label="Filter"></div>${rows || '<div class="empty">No calls yet. Call a procedure over HTTP, the CLI, MCP or an AI tool and it shows here.</div>'}`;
   const e = state.ex.get(state.sel.network);
   if (!e) { $('#detail').innerHTML = `<div class="empty">Pick a call to see its journey through every decision: how it came in, who called, whether the input and policy passed, what the handler did, and which analytics event went out.</div>`; return; }
   const t = exTitle(e);
   $('#detail').innerHTML = `
-    <h1><span class="pill ${surfaceOf(e)}">${surfaceOf(e)}</span><span class="mono">${esc(e.method)} ${esc(e.kind === 'llm' || e.kind === 'outbound' ? e.url : e.path)}</span><span class="status ${statusCls(e.status)}">${e.status ?? e.error ?? ''}</span></h1>
+    <h1><span class="pill ${surfaceOf(e)}">${surfaceOf(e)}</span><span class="mono">${esc(e.method)} ${esc(e.kind === 'llm' || e.kind === 'outbound' ? e.url : e.path)}</span><span class="status ${statusCls(e.status)}">${esc(e.status ?? e.error ?? '')}</span></h1>
     <div class="meta"><span>${time(e.at)}</span><span>${e.ms ?? '…'} ms</span>${t.sub ? `<span>${esc(t.sub)}</span>` : ''}</div>
     ${e.gates.length ? `<h2>AI tool approval</h2>${e.gates.map((g) => `<div class="gates"><b class="mono">${esc(g.tool)}</b>${gateChip(g)}</div>`).join('')}` : ''}
     ${e.calls.length ? `<h2>Journey</h2>${e.calls.map(journey).join('<div style="height:10px"></div>')}` : e.kind === 'rpc' || e.kind === 'mcp' ? '<h2>Journey</h2><div class="meta">No procedure ran for this request (a document, a protocol message, or a request rejected before the pipeline).</div>' : ''}
@@ -260,7 +260,7 @@ function mcpStatus(it) {
 }
 function renderMcp() {
   const items = mcpItems();
-  $('#list').innerHTML = items.map((it) => `<div class="row" tabindex="0" data-id="${it.key}" aria-selected="${state.sel.mcp === it.key}">
+  $('#list').innerHTML = items.map((it) => `<div class="row" tabindex="0" data-id="${esc(it.key)}" aria-selected="${state.sel.mcp === it.key}">
     <span class="t">${time(it.ex.at)}</span><span class="pill mcp">${it.msg.id == null ? 'notify' : 'call'}</span>
     <span class="name mono">${esc(it.msg.method)} <span class="sub">${esc(it.msg.params?.name ?? '')}</span></span>
     <span class="right">${it.msg.method === 'tools/call' && it.ex.calls[0] ? dots(it.ex.calls[0].steps) : ''}${mcpStatus(it)}</span></div>`).join('')
@@ -327,7 +327,7 @@ function toolCard({ name, input, gates, call, result, isError, waiting }) {
   const resultHtml = result !== undefined ? `<div><div class="meta" style="margin-bottom:4px">${isError ? 'Tool error returned to the model' : 'Result returned to the model'}</div>${json(tryParse(result))}</div>`
     : waiting ? '<div class="meta">The model is waiting. Nothing ran yet; a person has to approve this call.</div>' : '';
   return `<div class="tool ${waiting ? 'waiting' : isError ? 'err' : ''}">
-    <div class="th"><b>${esc(name)}</b>${proc?.aiTool?.needsApproval ? '<span class="badge write">needs approval</span>' : '<span class="badge plain">no approval</span>'}<span class="spacer"></span>${call ? dots(call.steps) : ''}${call ? `<span class="status ${call.result.ok ? 's2' : statusCls(call.result.status)}">${call.result.ok ? 200 : call.result.status + ' ' + esc(call.result.code)}</span>` : ''}</div>
+    <div class="th"><b>${esc(name)}</b>${proc?.aiTool?.needsApproval ? '<span class="badge write">needs approval</span>' : '<span class="badge plain">no approval</span>'}<span class="spacer"></span>${call ? dots(call.steps) : ''}${call ? `<span class="status ${call.result.ok ? 's2' : statusCls(call.result.status)}">${call.result.ok ? 200 : esc(call.result.status) + ' ' + esc(call.result.code)}</span>` : ''}</div>
     <div class="tb">${chips ? `<div class="gates">${chips}</div>` : ''}
       <div><div class="meta" style="margin-bottom:4px">Input from the model</div>${json(input)}</div>
       ${resultHtml}
@@ -363,7 +363,7 @@ function renderChat() {
   for (const m of messages) {
     if (m.role === 'assistant') {
       const call = c.calls[turn++];
-      if (call) parts.push(`<div class="turn">model call ${turn} · ${call.ms ?? '…'} ms${call.resBody?.usage ? ` · ${call.resBody.usage.input_tokens} in / ${call.resBody.usage.output_tokens} out` : ''}${call.resBody?.stop_reason ? ` · ${esc(call.resBody.stop_reason)}` : ''}</div>`);
+      if (call) parts.push(`<div class="turn">model call ${turn} · ${call.ms ?? '…'} ms${call.resBody?.usage ? ` · ${esc(call.resBody.usage.input_tokens)} in / ${esc(call.resBody.usage.output_tokens)} out` : ''}${call.resBody?.stop_reason ? ` · ${esc(call.resBody.stop_reason)}` : ''}</div>`);
     }
     const blocks = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content ?? [];
     for (const b of blocks) {
@@ -381,7 +381,7 @@ function renderChat() {
   const usage = c.calls.reduce((a, e) => [a[0] + (e.resBody?.usage?.input_tokens ?? 0), a[1] + (e.resBody?.usage?.output_tokens ?? 0)], [0, 0]);
   const sys = typeof req.system === 'string' ? req.system : textOf(req.system);
   $('#detail').innerHTML = `<h1>${esc(c.title.slice(0, 90))}</h1>
-    <div class="meta"><span class="mono">${esc(last.resBody?.model ?? req.model)}</span><span>${c.calls.length} model calls</span><span>${usage[0]} in / ${usage[1]} out tokens</span><span>${esc(last.path)}</span></div>
+    <div class="meta"><span class="mono">${esc(last.resBody?.model ?? req.model)}</span><span>${c.calls.length} model calls</span><span>${esc(usage[0])} in / ${esc(usage[1])} out tokens</span><span>${esc(last.path)}</span></div>
     ${offered ? `<h2>Tools offered</h2><div class="offered">${offered}</div>` : ''}
     ${sys ? `<h2>System prompt</h2><div class="sys">${esc(sys)}</div>` : ''}
     <h2>Conversation</h2><div class="chat">${parts.join('')}</div>`;

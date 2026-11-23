@@ -181,6 +181,18 @@ describe('topicPolicy', () => {
     expect(policy.subscribable('messages:9f1c')).toBe(false);
     expect(policy.subscribable('xmessages:channel:a')).toBe(false);
   });
+
+  it('gives the same answer each time for a pattern with the g or y flag', async () => {
+    const flagged = topicPolicy([
+      { pattern: /^public$/g, allow: () => true },
+      { pattern: /^open$/y, allow: () => true },
+    ]);
+    for (let i = 0; i < 4; i++) {
+      expect(await flagged(ctx('public'))).toBeUndefined();
+      expect(await flagged(ctx('open'))).toBeUndefined();
+      expect(flagged.subscribable('public')).toBe(true);
+    }
+  });
 });
 
 describe('publishTopics', () => {

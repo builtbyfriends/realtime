@@ -13,7 +13,7 @@ export const env: Env = {
 
 const { procedure, profile } = createProcedures<Env>();
 export { procedure };
-export const token = bearerAuth<User, Env>({ name: 'api-token', verify: (t, e) => e.tokens[t] ?? null, actorId: (u) => u.id });
+export const token = bearerAuth<User, Env>({ name: 'api-token', verify: (t, e) => (Object.hasOwn(e.tokens, t) ? e.tokens[t]! : null), actorId: (u) => u.id });
 
 export const req = (token?: string) =>
   new Request('https://api.test/rpc/x', { method: 'POST', headers: token ? { authorization: `Bearer ${token}` } : {} });
@@ -31,6 +31,7 @@ export const getContact = procedure('contacts.get')
   .handler(({ input, ctx, fail }) => {
     if (input.id === 'missing') return fail('NOT_FOUND');
     if (input.id === 'gone') return fail('GONE', 'Deleted on Tuesday');
+    if (input.id === 'inherited') return fail('constructor' as any);
     if (input.id === 'boom') throw new Error('database exploded');
     if (input.id === 'badshape') return { id: 1 } as any;
     return { id: input.id, owner: ctx.id };

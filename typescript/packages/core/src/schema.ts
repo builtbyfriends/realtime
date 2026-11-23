@@ -11,8 +11,7 @@ export async function validate(
   schema: AnySchema,
   value: unknown,
 ): Promise<{ ok: true; value: unknown } | { ok: false; issues: { message: string; path: string }[] }> {
-  let result = schema['~standard'].validate(value);
-  if (result instanceof Promise) result = await result;
+  const result = await schema['~standard'].validate(value);
   if (result.issues) {
     return {
       ok: false,

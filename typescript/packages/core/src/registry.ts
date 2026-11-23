@@ -379,7 +379,7 @@ export function defineRegistry<const P extends readonly AnyProcedure[]>(
         step('output', 'fail', `did not match the schema, so callers get 500 INTERNAL: ${out.issues.map((i) => i.message).join('; ')}`);
       }
     } catch (e) {
-      const spec = e instanceof ProcedureError ? proc.errors[e.code] : undefined;
+      const spec = e instanceof ProcedureError && Object.hasOwn(proc.errors, e.code) ? proc.errors[e.code] : undefined;
       if (e instanceof ProcedureError && spec) {
         result = {
           ok: false,
