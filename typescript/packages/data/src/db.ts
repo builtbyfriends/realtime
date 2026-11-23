@@ -16,9 +16,9 @@ export interface IndexRange {
   lte(field: string, value: unknown): IndexRange;
 }
 
-/** Reads. A query function gets this; a mutation gets `Db`, which adds writes. */
 const limitOf = (asked: number | undefined, fallback: number) => (typeof asked === 'number' && Number.isFinite(asked) && asked >= 0 ? Math.floor(asked) : fallback);
 
+/** Reads. A query function gets this; a mutation gets `Db`, which adds writes. */
 export class DbReader<S extends Schema> {
   /** @internal */
   constructor(
