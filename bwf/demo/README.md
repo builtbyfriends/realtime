@@ -162,8 +162,8 @@ How it works: the registry has a `trace` channel that records each step of a cal
 
 ## Not in this demo yet
 
-- **Better Auth.** Tokens are SHA-256 hashes in a D1 table read by `apiTokens()`. Sessions and Better Auth API keys come next (PLAN.md, build step 2).
-- **Names from file paths.** Procedures still name themselves (`procedure('contacts.get')`). That needs the small core change in the plan.
+- **Better Auth.** Tokens are SHA-256 hashes in a D1 table read by `apiTokens()`. Sessions and Better Auth API keys come next.
+- **Names from file paths.** Procedures still name themselves (`procedure('contacts.get')`). That needs a small core change.
 - **`npx realtime init`.** The middleware file and config line are written by hand here.
 - **Real deploy.** Not run with `bwf deploy` to Cloudflare, which needs your account. The load gate was checked by starting the built Worker in Miniflare, which uses the same runtime as Cloudflare.
 - **Dev analytics logging.** In dev, analytics events are also printed to the console. That's how the demo collects them; production writes only to Analytics Engine.
