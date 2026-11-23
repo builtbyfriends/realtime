@@ -214,6 +214,8 @@ describe('topicPolicy', () => {
     expect(await loose(ctx('room:ab'))).toBeUndefined();
     expect((await loose(ctx('room:abc')))?.status).toBe(403);
     expect((await loose(ctx('xroom:a')))?.status).toBe(403);
+    const lines = topicPolicy([{ pattern: /room:a/m, allow: () => true }]);
+    expect((await lines(ctx('x\nroom:a')))?.status).toBe(403);
   });
 
   it('says which topics a client could ever subscribe to', () => {

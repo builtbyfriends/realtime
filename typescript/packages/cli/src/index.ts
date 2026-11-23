@@ -11,6 +11,8 @@ type Io = {
 
 type Prop = { type?: string | string[]; description?: string; enum?: unknown[]; items?: Prop; anyOf?: Prop[] };
 
+// Decision: text from the server is printed without control characters, so a response can't drive the terminal.
+const plain = (s: unknown) => String(s).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
 const kebab = (s: string) => s.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/_/g, '-').toLowerCase();
 
 function typeOf(p: Prop): string {
@@ -73,7 +75,7 @@ function coerce(name: string, prop: Prop, raw: string | true): unknown {
   }
   if (raw === true) throw new UsageError(`--${name} needs a value`);
   if (t === 'number' || t === 'integer') {
-    const n = Number(raw);
+    const n = raw.trim() === '' ? NaN : Number(raw);
     if (!Number.isFinite(n) || (t === 'integer' && !Number.isInteger(n))) throw new UsageError(`--${name} must be ${t === 'integer' ? 'an integer' : 'a number'}`);
     return n;
   }
@@ -234,7 +236,14 @@ export async function run(io: Io): Promise<number> {
     return 2;
   }
 
-  const res = await f(`${origin}${entry.path}`, {
+  // Decision: the path comes from the server's manifest, and the token goes with the request, so the request stays on the
+  // host the user named.
+  const target = new URL(entry.path, `${origin}/`);
+  if (!entry.path.startsWith('/') || target.origin !== new URL(origin).origin) {
+    io.stderr(`realtime: the server listed a path on another host for this command, so nothing was sent\n`);
+    return 1;
+  }
+  const res = await f(target.toString(), {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-realtime-surface': 'cli', ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: input === undefined ? '' : JSON.stringify(input),
@@ -245,12 +254,12 @@ export async function run(io: Io): Promise<number> {
     return 1;
   }
   if (res.ok && !body?.error) {
-    io.stdout(JSON.stringify(body?.data, null, 2) + '\n');
+    io.stdout(JSON.stringify(body?.data ?? null, null, 2) + '\n');
     return 0;
   }
   const err = typeof body?.error === 'object' && body.error !== null && typeof body.error.code === 'string' ? body.error : { code: 'INTERNAL', message: `HTTP ${res.status}` };
-  io.stderr(`error ${err.code}: ${err.message}\n`);
-  for (const i of err.issues ?? []) io.stderr(`  ${i.path ? `--${kebab(i.path.split('.')[0]!)}` : 'input'}: ${i.message}\n`);
+  io.stderr(`error ${plain(err.code)}: ${plain(err.message)}\n`);
+  for (const i of Array.isArray(err.issues) ? err.issues : []) io.stderr(`  ${typeof i.path === 'string' && i.path ? `--${kebab(plain(i.path).split('.')[0]!)}` : 'input'}: ${plain(i.message)}\n`);
   if (res.status === 401) io.stderr('Set --token or REALTIME_TOKEN to an API token.\n');
   return 1;
 }

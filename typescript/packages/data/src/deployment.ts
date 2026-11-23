@@ -502,7 +502,9 @@ export class Engine {
     // Decision: access is checked again before the commit goes out, so a reader the commit removed doesn't get what it wrote.
     if (touched.size && this.rechecks.length) {
       try {
-        if (this.def.syncRecheck?.([...touched]) === true) for (const fn of this.rechecks) fn();
+        // Decision: only a plain false skips the check. A hook that returns a promise or nothing would otherwise skip it for good.
+        const hook = this.def.syncRecheck;
+        if (hook && hook([...touched]) !== false) for (const fn of this.rechecks) fn();
       } catch (e) {
         console.error('sync recheck failed', e);
       }

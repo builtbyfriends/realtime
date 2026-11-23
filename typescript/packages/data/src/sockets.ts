@@ -149,7 +149,7 @@ export class SyncSockets {
       return;
     }
     if (msg.type === 'unquery') {
-      const ids = strings(msg.ids);
+      const ids = Array.isArray(msg.ids) ? msg.ids.filter((id) => typeof id === 'string' || typeof id === 'number').map(String) : [];
       this.save(ws, { ...who, queries: (who.queries ?? []).filter((q) => !ids.includes(q.id)) });
       const mine = this.sent.get(ws);
       for (const id of ids) mine?.delete(id);
@@ -284,9 +284,14 @@ export class SyncSockets {
     const ok = !!name && topics.length <= MAX_ASKED && allowed.length === topics.length;
     const query: LiveQuery = { id, name, input: msg.input ?? null, topics };
     if (!ok || !this.save(ws, { ...who, queries: [...(who.queries ?? []).filter((q) => q.id !== id), query] })) {
+      // Decision: a query that is refused under an id also ends the query that id had before, so the device and the object agree.
+      if ((who.queries ?? []).some((q) => q.id === id)) this.drop(ws, id);
       trySend(ws, { type: 'result', id, denied: true });
       return;
     }
+    // Decision: a query sent again under the same id gets its answer again, even when the answer is the same.
+    const slot = this.sent.get(ws)?.get(id);
+    if (slot) delete slot.json;
     void this.answer(ws, who.actor, query);
   }
 

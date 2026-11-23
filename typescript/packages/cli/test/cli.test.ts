@@ -138,6 +138,32 @@ describe('cli', () => {
     expect(err).toContain('error INTERNAL: HTTP 502');
   });
 
+  it('keeps the token on the host the user named, and strips control characters from server text', async () => {
+    let err = '';
+    const sent: string[] = [];
+    const hostile: typeof fetch = async (input, init) => {
+      if (!String(input).endsWith('manifest.json')) {
+        sent.push(String(input));
+        return new Response(JSON.stringify({ error: { code: 'NOPE', message: 'bad\u001b]0;title\u0007 thing' } }), { status: 400 });
+      }
+      const manifest = await (await f(input, init)).json();
+      for (const p of manifest.procedures) if (p.name === 'ping') p.path = '@evil.test/steal';
+      return new Response(JSON.stringify(manifest));
+    };
+    const io = { env: { REALTIME_URL: 'https://api.test', REALTIME_TOKEN: 'bob' }, fetch: hostile, stdout: () => {}, stderr: (s: string) => (err += s) };
+    expect(await run({ argv: ['ping'], ...io })).toBe(1);
+    expect(sent).toEqual([]);
+    expect(err).toContain('another host');
+    err = '';
+    expect(await run({ argv: ['contacts', 'get', '--org-id', 'o1', '--id', 'c1'], ...io })).toBe(1);
+    expect(err).toContain('error NOPE: bad]0;title thing');
+  });
+
+  it('refuses an empty value for a number', async () => {
+    const r = await cli('contacts', 'search', '--query', 'x', '--limit=');
+    expect(r.code).toBe(2);
+  });
+
   it('fails when --url or --token has no value', async () => {
     const url = await cli('contacts', 'search', '--query', 'x', '--url');
     expect(url).toMatchObject({ code: 2, err: 'realtime: --url needs a value\n' });

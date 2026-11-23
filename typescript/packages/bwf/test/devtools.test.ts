@@ -33,11 +33,13 @@ describe('header masking', () => {
 
   it('masks custom secret headers and secret query values', async () => {
     const devtools = createDevtools(registry, app);
-    await devtools.record(new Request('https://app.test/rpc/x?key=abcdefghijkl&page=2', { headers: { 'x-auth-token': 'abcdefghijkl' } }), () => {}, async () => new Response('{}'));
+    await devtools.record(new Request('https://app.test/rpc/x?key=abcdefghijkl&page=2&keyword=a%20long%20phrase', { headers: { 'x-auth-token': 'abcdefghijkl', 'x-ratelimit-remaining-tokens': '1234567' } }), () => {}, async () => new Response('{}'));
     const ex = (await (await devtools.serve(new Request('https://app.test/__realtime/events'))).json()).exchanges[0];
     expect(ex.reqHeaders['x-auth-token']).toBe('abcdef…');
     expect(ex.url).not.toContain('abcdefghijkl');
     expect(ex.url).toContain('page=2');
+    expect(ex.url).toContain('keyword=a%20long%20phrase');
+    expect(ex.reqHeaders['x-ratelimit-remaining-tokens']).toBe('1234567');
   });
 });
 

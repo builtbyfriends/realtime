@@ -28,8 +28,8 @@ type Exchange = {
 const MAX = 400;
 const MAX_BODY = 20_000;
 const MAX_EVENTS = 200;
-const SECRET_HEADERS = /^(cookie|set-cookie)$|auth|token|secret|api-?key|password|session/i;
-const SECRET_PARAMS = /token|secret|key|password|signature|code/i;
+const SECRET_HEADERS = /^(cookie|set-cookie|authorization|proxy-authorization)$|api-?key|secret|password|(^|-)token$/i;
+const SECRET_PARAMS = /^(token|access_token|id_token|refresh_token|key|api_?key|secret|client_secret|password|signature|sig|code)$/i;
 // Decision: the dev server or the HTTP client adds these to each request, so they only add noise.
 const NOISE_HEADERS = /^(cf-|x-forwarded-|sec-|accept-encoding$|accept-language$|connection$|host$|content-length$)/i;
 
@@ -86,15 +86,7 @@ function parseBody(text: string, contentType: string | null): unknown {
   }
 }
 
-const shownUrl = (raw: string) => {
-  try {
-    const url = new URL(raw);
-    for (const [name, value] of [...url.searchParams]) if (SECRET_PARAMS.test(name)) url.searchParams.set(name, show(value));
-    return url.toString();
-  } catch {
-    return raw;
-  }
-};
+const shownUrl = (raw: string) => raw.replace(/([?&])([^=&#]+)=([^&#]*)/g, (all, sep: string, name: string, value: string) => (SECRET_PARAMS.test(name) ? `${sep}${name}=${show(value)}` : all));
 
 export function createDevtools(registry: Registry, app: { name: string; basePath: string; mcpRoute: string }) {
   const route = '/__realtime';

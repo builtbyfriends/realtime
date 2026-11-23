@@ -520,6 +520,16 @@ describe('round 4 guards', () => {
     expect(moved).toEqual(['room:z:removed', 'room:a:put']);
   });
 
+  it('checks access again unless the recheck hook says a plain false', async () => {
+    for (const [answer, expected] of [[undefined, 1], [Promise.resolve(false), 1], [true, 1], [false, 0]] as const) {
+      const { engine, m } = setup({ syncRecheck: () => answer });
+      const rechecked = vi.fn();
+      engine.onRecheck(rechecked);
+      await m('add', { room: 'a', text: 't' });
+      expect(rechecked).toHaveBeenCalledTimes(expected);
+    }
+  });
+
   it('denies a group when the access hook returns something other than true', () => {
     const { engine } = setup({ syncAccess: async () => false });
     expect(engine.access('u', ['secret'])).toEqual([]);
