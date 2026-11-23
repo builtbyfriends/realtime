@@ -78,6 +78,7 @@ type Entry = {
   listeners: Set<() => void>;
   stops: Array<() => void>;
   inFlight: boolean;
+  running: Promise<void> | undefined;
   dirty: boolean;
   timer: ReturnType<typeof setTimeout> | undefined;
   gc: ReturnType<typeof setTimeout> | undefined;
@@ -104,23 +105,29 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
   async function fetchNow(e: Entry): Promise<void> {
     if (e.inFlight) {
       e.dirty = true;
-      return;
+      return e.running;
     }
     e.inFlight = true;
+    let finish!: () => void;
+    e.running = new Promise<void>((resolve) => (finish = resolve));
     const generation = e.generation;
-    do {
-      e.dirty = false;
-      if (e.state.status !== 'loading') set(e, { ...e.state, fetching: true } as QueryState<any>);
-      try {
-        const data = await options.client.call(e.name, e.input);
-        if (generation !== e.generation) break;
-        set(e, { status: 'ready', data, error: undefined, fetching: e.dirty });
-      } catch (err) {
-        if (generation !== e.generation) break;
-        set(e, { status: 'error', data: e.state.data, error: err instanceof Error ? err : new Error(String(err)), fetching: e.dirty });
-      }
-    } while (e.dirty && generation === e.generation);
-    e.inFlight = false;
+    try {
+      do {
+        e.dirty = false;
+        if (e.state.status !== 'loading') set(e, { ...e.state, fetching: true } as QueryState<any>);
+        try {
+          const data = await options.client.call(e.name, e.input);
+          if (generation !== e.generation) break;
+          set(e, { status: 'ready', data, error: undefined, fetching: e.dirty });
+        } catch (err) {
+          if (generation !== e.generation) break;
+          set(e, { status: 'error', data: e.state.data, error: err instanceof Error ? err : new Error(String(err)), fetching: e.dirty });
+        }
+      } while (e.dirty && generation === e.generation);
+    } finally {
+      if (generation === e.generation) e.inFlight = false;
+      finish();
+    }
   }
 
   function set(e: Entry, state: QueryState<any>) {
@@ -129,6 +136,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
   }
 
   function schedule(e: Entry) {
+    if (!e.listeners.size) return;
     clearTimeout(e.timer);
     e.timer = setTimeout(() => void fetchNow(e), debounceMs);
   }
@@ -166,8 +174,9 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     for (const s of e.stops.splice(0)) s();
     e.generation++;
     e.inFlight = false;
+    clearTimeout(e.gc);
     e.gc = setTimeout(() => {
-      if (!e.listeners.size) entries.delete(e.key);
+      if (!e.listeners.size && entries.get(e.key) === e) entries.delete(e.key);
     }, cacheMs);
   }
 
@@ -182,7 +191,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     const key = `${name}:${stableKey(input)}:${stableKey(topics)}`;
     let e = entries.get(key);
     if (!e) {
-      e = { key, name, input, topics, state: { status: 'loading', data: undefined, error: undefined, fetching: true }, listeners: new Set(), stops: [], inFlight: false, dirty: false, timer: undefined, gc: undefined, generation: 0 };
+      e = { key, name, input, topics, state: { status: 'loading', data: undefined, error: undefined, fetching: true }, listeners: new Set(), stops: [], inFlight: false, running: undefined, dirty: false, timer: undefined, gc: undefined, generation: 0 };
       entries.set(key, e);
     }
     const entry = e;
@@ -190,7 +199,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
       getSnapshot: () => entry.state,
       subscribe(listener) {
         entry.listeners.add(listener);
-        if (enabled && entry.listeners.size === 1) start(entry);
+        if (enabled) start(entry);
         return () => {
           entry.listeners.delete(listener);
           if (!entry.listeners.size) stop(entry);
@@ -214,19 +223,19 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     mutateOptions: MutateOptions<R> = {},
   ): Promise<OutputOf<Procs<R>[N]>> {
     const changed: Array<{ e: Entry; before: QueryState<any>; guess: QueryState<any> }> = [];
-    mutateOptions.optimistic?.({
-      update(queryName, queryInput, fn) {
-        const prefix = `${queryName}:${stableKey(queryInput)}:`;
-        for (const e of entries.values()) {
-          if (!e.key.startsWith(prefix) || e.state.data === undefined) continue;
-          const before = e.state;
-          const guess = { ...before, data: fn(before.data) } as QueryState<any>;
-          set(e, guess);
-          changed.push({ e, before, guess });
-        }
-      },
-    });
     try {
+      mutateOptions.optimistic?.({
+        update(queryName, queryInput, fn) {
+          const prefix = `${queryName}:${stableKey(queryInput)}:`;
+          for (const e of entries.values()) {
+            if (!e.key.startsWith(prefix) || e.state.data === undefined) continue;
+            const before = e.state;
+            const guess = { ...before, data: fn(before.data) } as QueryState<any>;
+            set(e, guess);
+            changed.push({ e, before, guess });
+          }
+        },
+      });
       return await options.client.call(name, input);
     } catch (err) {
       for (const { e, before, guess } of changed.reverse()) if (e.state === guess) set(e, before);
