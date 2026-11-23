@@ -279,9 +279,9 @@ export class SyncSockets {
     const id = typeof msg.id === 'string' || typeof msg.id === 'number' ? String(msg.id) : null;
     if (id === null) return;
     const name = typeof msg.name === 'string' ? msg.name : '';
-    const topics = strings(msg.topics).slice(0, MAX_ASKED);
-    const allowed = name && this.hooks.query && this.hooks.topicAccess ? this.hooks.topicAccess(who.actor, topics) : [];
-    const ok = !!name && allowed.length === topics.length;
+    const topics = strings(msg.topics);
+    const allowed = name && topics.length <= MAX_ASKED && this.hooks.query && this.hooks.topicAccess ? this.hooks.topicAccess(who.actor, topics) : [];
+    const ok = !!name && topics.length <= MAX_ASKED && allowed.length === topics.length;
     const query: LiveQuery = { id, name, input: msg.input ?? null, topics };
     if (!ok || !this.save(ws, { ...who, queries: [...(who.queries ?? []).filter((q) => q.id !== id), query] })) {
       trySend(ws, { type: 'result', id, denied: true });
@@ -339,8 +339,15 @@ export class SyncSockets {
       const page = { ...result, changes: this.see(actor, result.changes) };
       // Decision: a page that wouldn't fit in one message is read again at half the size. A page of one commit can't shrink.
       const fits = bytes(page.changes) <= MAX_RESULT;
-      if (!fits && result.changes.length <= 1) throw new Error('one change is too large for a message');
-      if (fits || size === 1) return page;
+      if (fits) return page;
+      // Decision: one document too large for a message goes out as a removal and is logged. Closing the socket would bring
+      // the device back to the same document on each reconnect.
+      if (page.changes.length === 1) {
+        const [c] = page.changes;
+        console.error(`sync change of ${c!.table} ${c!.id} is too large for a message`);
+        return { ...page, changes: [{ ...c!, doc: null }] };
+      }
+      if (size === 1) return page;
       size = Math.max(1, Math.floor(Math.min(size, result.changes.length) / 2));
     }
   }

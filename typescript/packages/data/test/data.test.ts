@@ -391,13 +391,18 @@ describe('guards on functions and jobs', () => {
     const data = defineData({
       schema,
       functions: ({ query, mutation }) => ({
-        later: mutation(async (ctx) => void ctx.db.insert('notes', { text: 'x' })),
+        later: mutation(async (ctx) => {
+          ctx.db.insert('notes', { text: 'before' });
+          await Promise.resolve();
+          ctx.db.insert('notes', { text: 'after' });
+        }),
         count: query((ctx) => ctx.db.query('notes').collect().length),
       }),
     });
     const engine = data.engine(memoryStorage());
     engine.init();
     await expect(engine.run('mutation', 'later', undefined)).rejects.toThrow('returned a promise');
+    await new Promise((r) => setTimeout(r, 0));
     expect(await engine.run('query', 'count', undefined)).toBe(0);
   });
 
@@ -411,6 +416,8 @@ describe('guards on functions and jobs', () => {
     expect(due).toHaveLength(2);
     expect(scheduler.started(due[1]!)).toBeNull();
     expect(scheduler.started(due[0]!)).toBe(1);
+    scheduler.runAfter(0, 'ping', { n: 3 }, { id: 'a' });
+    expect(scheduler.started(scheduler.due(Date.now() + 1, 10)[0]!)).toBe(1);
     expect(calls).toEqual([]);
   });
 });
