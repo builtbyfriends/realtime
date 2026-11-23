@@ -19,7 +19,8 @@ export interface LiveTransport {
 }
 
 export type QueryState<T> =
-  | { status: 'loading'; data: undefined; error: undefined; fetching: true }
+  /** `fetching` is false while a query is idle: disabled and never started. */
+  | { status: 'loading'; data: undefined; error: undefined; fetching: boolean }
   | { status: 'ready'; data: T; error: undefined; fetching: boolean }
   /** `data` is the last good value, if there was one. */
   | { status: 'error'; data: T | undefined; error: Error; fetching: boolean };
@@ -36,6 +37,11 @@ export type LiveOptions<R> = {
   topics?: TopicMap<R>;
   /** Events within this window collapse into one refetch. Default 50. */
   debounceMs?: number;
+  /**
+   * The longest an event waits before a refetch, when events keep arriving faster than `debounceMs` and would
+   * otherwise keep pushing it back. Default 4 times `debounceMs`.
+   */
+  maxWaitMs?: number;
   /** How long a query nobody watches stays cached for the next mount to show. Default 30000. */
   cacheMs?: number;
   /** Also refetch when the tab becomes visible again or the browser goes back online. Default true. */
@@ -75,7 +81,7 @@ type Entry = {
   input: unknown;
   topics: string[];
   state: QueryState<any>;
-  listeners: Set<() => void>;
+  subs: Set<Sub>;
   stops: Array<() => void>;
   inFlight: boolean;
   running: Promise<void> | undefined;
@@ -83,7 +89,19 @@ type Entry = {
   timer: ReturnType<typeof setTimeout> | undefined;
   gc: ReturnType<typeof setTimeout> | undefined;
   generation: number;
+  waitStart: number | undefined;
+  guessed: boolean;
+  settled: any;
 };
+
+type Sub = { listener: () => void; enabled: boolean };
+
+const idle: QueryState<any> = { status: 'loading', data: undefined, error: undefined, fetching: false };
+
+function hasEnabled(e: Entry): boolean {
+  for (const s of e.subs) if (s.enabled) return true;
+  return false;
+}
 
 /** Sorted-key JSON, so `{a,b}` and `{b,a}` share one cache entry. */
 export function stableKey(value: unknown): string {
@@ -100,6 +118,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
   const entries = new Map<string, Entry>();
   const debounceMs = options.debounceMs ?? 50;
   const cacheMs = options.cacheMs ?? 30_000;
+  const maxWaitMs = options.maxWaitMs ?? debounceMs * 4;
   const topicsFor = options.topics as Record<string, ((input: unknown) => string[]) | undefined> | undefined;
 
   async function fetchNow(e: Entry): Promise<void> {
@@ -118,10 +137,13 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
         try {
           const data = await options.client.call(e.name, e.input);
           if (generation !== e.generation) break;
+          e.guessed = false;
           set(e, { status: 'ready', data, error: undefined, fetching: e.dirty });
         } catch (err) {
           if (generation !== e.generation) break;
-          set(e, { status: 'error', data: e.state.data, error: err instanceof Error ? err : new Error(String(err)), fetching: e.dirty });
+          const data = e.guessed ? e.settled : e.state.data;
+          e.guessed = false;
+          set(e, { status: 'error', data, error: err instanceof Error ? err : new Error(String(err)), fetching: e.dirty });
         }
       } while (e.dirty && generation === e.generation);
     } finally {
@@ -132,13 +154,26 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
 
   function set(e: Entry, state: QueryState<any>) {
     e.state = state;
-    for (const l of [...e.listeners]) l();
+    for (const s of [...e.subs]) s.listener();
   }
 
   function schedule(e: Entry) {
-    if (!e.listeners.size) return;
+    if (!hasEnabled(e)) return;
     clearTimeout(e.timer);
-    e.timer = setTimeout(() => void fetchNow(e), debounceMs);
+    const now = Date.now();
+    e.waitStart ??= now;
+    const delay = Math.min(debounceMs, Math.max(0, e.waitStart + maxWaitMs - now));
+    e.timer = setTimeout(() => {
+      e.waitStart = undefined;
+      void fetchNow(e);
+    }, delay);
+  }
+
+  function collectLater(e: Entry) {
+    clearTimeout(e.gc);
+    e.gc = setTimeout(() => {
+      if (!e.subs.size && entries.get(e.key) === e) entries.delete(e.key);
+    }, cacheMs);
   }
 
   function start(e: Entry) {
@@ -171,13 +206,10 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
 
   function stop(e: Entry) {
     clearTimeout(e.timer);
+    e.waitStart = undefined;
     for (const s of e.stops.splice(0)) s();
     e.generation++;
     e.inFlight = false;
-    clearTimeout(e.gc);
-    e.gc = setTimeout(() => {
-      if (!e.listeners.size && entries.get(e.key) === e) entries.delete(e.key);
-    }, cacheMs);
   }
 
   /** Watch one query. React's `useQuery` is a thin wrapper over this. */
@@ -186,26 +218,40 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     input: InputOf<Procs<R>[N]>,
     queryOptions: QueryOptions = {},
   ): QueryHandle<OutputOf<Procs<R>[N]>> {
-    const topics = queryOptions.topics ?? topicsFor?.[name]?.(input) ?? [];
+    const topics = [...new Set(queryOptions.topics ?? topicsFor?.[name]?.(input) ?? [])].sort();
     const enabled = queryOptions.enabled !== false;
     const key = `${name}:${stableKey(input)}:${stableKey(topics)}`;
     let e = entries.get(key);
     if (!e) {
-      e = { key, name, input, topics, state: { status: 'loading', data: undefined, error: undefined, fetching: true }, listeners: new Set(), stops: [], inFlight: false, running: undefined, dirty: false, timer: undefined, gc: undefined, generation: 0 };
+      e = { key, name, input, topics, state: { status: 'loading', data: undefined, error: undefined, fetching: true }, subs: new Set(), stops: [], inFlight: false, running: undefined, dirty: false, timer: undefined, gc: undefined, generation: 0, waitStart: undefined, guessed: false, settled: undefined };
       entries.set(key, e);
+      collectLater(e);
     }
-    const entry = e;
+    let entry = e;
+    function resolve(reinsert: boolean): Entry {
+      const current = entries.get(key);
+      if (current) entry = current;
+      else if (reinsert) entries.set(key, entry);
+      return entry;
+    }
     return {
-      getSnapshot: () => entry.state,
+      getSnapshot() {
+        const current = resolve(false);
+        return !enabled && current.state.status === 'loading' && !current.stops.length && !current.inFlight ? idle : current.state;
+      },
       subscribe(listener) {
-        entry.listeners.add(listener);
-        if (enabled) start(entry);
+        const current = resolve(true);
+        const sub: Sub = { listener, enabled };
+        current.subs.add(sub);
+        clearTimeout(current.gc);
+        if (enabled) start(current);
         return () => {
-          entry.listeners.delete(listener);
-          if (!entry.listeners.size) stop(entry);
+          if (!current.subs.delete(sub)) return;
+          if (current.stops.length && !hasEnabled(current)) stop(current);
+          if (!current.subs.size) collectLater(current);
         };
       },
-      refetch: () => fetchNow(entry),
+      refetch: () => fetchNow(resolve(false)),
     };
   }
 
@@ -222,7 +268,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     input: InputOf<Procs<R>[N]>,
     mutateOptions: MutateOptions<R> = {},
   ): Promise<OutputOf<Procs<R>[N]>> {
-    const changed: Array<{ e: Entry; before: QueryState<any>; guess: QueryState<any> }> = [];
+    const changed: Array<{ e: Entry; before: QueryState<any>; guess: QueryState<any>; wasGuessed: boolean }> = [];
     try {
       mutateOptions.optimistic?.({
         update(queryName, queryInput, fn) {
@@ -231,23 +277,30 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
             if (!e.key.startsWith(prefix) || e.state.data === undefined) continue;
             const before = e.state;
             const guess = { ...before, data: fn(before.data) } as QueryState<any>;
+            const wasGuessed = e.guessed;
+            if (!wasGuessed) e.settled = before.data;
+            e.guessed = true;
             set(e, guess);
-            changed.push({ e, before, guess });
+            changed.push({ e, before, guess, wasGuessed });
           }
         },
       });
       return await options.client.call(name, input);
     } catch (err) {
-      for (const { e, before, guess } of changed.reverse()) if (e.state === guess) set(e, before);
+      for (const { e, before, guess, wasGuessed } of changed.reverse()) {
+        if (e.state !== guess) continue;
+        e.guessed = wasGuessed;
+        set(e, before);
+      }
       throw err;
     } finally {
-      for (const { e } of changed) if (e.listeners.size) void fetchNow(e);
+      for (const { e } of changed) if (hasEnabled(e)) void fetchNow(e);
     }
   }
 
   /** Refetch every query that is currently being watched. */
   function refetchAll(): Promise<void[]> {
-    return Promise.all([...entries.values()].filter((e) => e.listeners.size).map((e) => fetchNow(e)));
+    return Promise.all([...entries.values()].filter(hasEnabled).map((e) => fetchNow(e)));
   }
 
   /**
@@ -271,7 +324,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
 
   /** Refetches the watched answers of a procedure whose input passes `match`. */
   function refetch<N extends keyof Procs<R> & string>(name: N, match: (input: InputOf<Procs<R>[N]>) => boolean = () => true): Promise<void[]> {
-    return Promise.all([...entries.values()].filter((e) => e.name === name && e.listeners.size && match(e.input as InputOf<Procs<R>[N]>)).map((e) => fetchNow(e)));
+    return Promise.all([...entries.values()].filter((e) => e.name === name && hasEnabled(e) && match(e.input as InputOf<Procs<R>[N]>)).map((e) => fetchNow(e)));
   }
 
   return { query, mutate, refetchAll, update, refetch };
