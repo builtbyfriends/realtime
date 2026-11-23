@@ -418,6 +418,9 @@ export class Engine {
     const handler = this.def.jobs[job.name];
     try {
       if (!handler) throw new Error(`no job named "${job.name}"`);
+      // Decision: a job that used its attempts without finishing or throwing took the object down each time, so it's parked.
+      if (job.attempts >= max) throw new Error('stopped before it finished, too many times');
+      scheduler.started(job);
       await handler({ env: this.env, id: job.id, attempt: job.attempts + 1, data: this.dataClient() }, job.args);
       scheduler.done(job);
     } catch (e) {

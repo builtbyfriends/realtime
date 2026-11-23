@@ -72,6 +72,11 @@ export class Scheduler {
     return run<{ at: number | null }>(this.storage, `SELECT MIN(run_at) AS at FROM _jobs WHERE status='pending'`)[0]?.at ?? null;
   }
 
+  /** @internal Called before the handler runs, so a run that takes the object down with it still counts as an attempt. */
+  started(job: ScheduledJob): void {
+    run(this.storage, `UPDATE _jobs SET attempts=? WHERE id=? AND run_at=?`, job.attempts + 1, job.id, job.runAt);
+  }
+
   /** @internal Called after the handler succeeded. Skips a job that was replaced while it ran. */
   done(job: ScheduledJob): void {
     run(this.storage, `DELETE FROM _jobs WHERE id=? AND run_at=?`, job.id, job.runAt);

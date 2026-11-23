@@ -152,6 +152,55 @@ describe('index clean-up', () => {
   });
 });
 
+describe('schema edges', () => {
+  type Note = { owner: string; body: string; tag?: string | null; v?: number[] };
+  const notes = (extra: object = {}) => defineSchema({ notes: table<Note>({ indexes: { by_owner: ['owner'], by_tag: ['tag'] }, ...extra }) });
+  const fns = ({ query, mutation }: any) => ({
+    add: mutation((ctx: any, a: Note) => ctx.db.insert('notes', a)),
+    find: query((ctx: any, text: string) => ctx.db.search('notes', 'body', text).map((n: Note) => n.body)),
+    near: query((ctx: any, v: number[]) => ctx.db.vectorSearch('notes', 'v', v).map((r: { doc: Note }) => r.doc.body)),
+    untagged: query((ctx: any) => ctx.db.query('notes').withIndex('by_tag', (q: any) => q.eq('tag', undefined)).collect().map((n: Note) => n.body)),
+    twice: query((ctx: any) => ctx.db.query('notes').withIndex('by_owner', (q: any) => q.eq('owner', 'ann')).withIndex('by_tag').collect()),
+  });
+  const open = (storage: ReturnType<typeof memoryStorage>, extra: object = {}) => {
+    const engine = defineData({ schema: notes(extra), functions: fns }).engine(storage);
+    engine.init();
+    return engine;
+  };
+
+  it('refuses a second index on one query, which used to drop the first one\'s conditions', async () => {
+    await expect(open(memoryStorage()).run('query', 'twice', undefined)).rejects.toThrow('walks one index');
+  });
+
+  it('reads eq(field, undefined) as a missing field, like null', async () => {
+    const engine = open(memoryStorage());
+    await engine.run('mutation', 'add', { owner: 'ann', body: 'plain' });
+    await engine.run('mutation', 'add', { owner: 'ann', body: 'tagged', tag: 't' });
+    expect(await engine.run('query', 'untagged', undefined)).toEqual(['plain']);
+  });
+
+  it('builds a search index again when it comes back after being removed', async () => {
+    const storage = memoryStorage();
+    const search = { search: { body: { field: 'body' } } };
+    await open(storage, search).run('mutation', 'add', { owner: 'ann', body: 'first note' });
+    await open(storage).run('mutation', 'add', { owner: 'ann', body: 'second note' });
+    expect(await open(storage, search).run('query', 'find', 'note')).toHaveLength(2);
+  });
+
+  it('leaves a stored vector of another length out of a rebuilt index', async () => {
+    const storage = memoryStorage();
+    await open(storage, { vectors: { v: { field: 'v', dimensions: 2 } } }).run('mutation', 'add', { owner: 'ann', body: 'old', v: [1, 0] });
+    const engine = open(storage, { vectors: { v: { field: 'v', dimensions: 3 } } });
+    await engine.run('mutation', 'add', { owner: 'ann', body: 'new', v: [1, 0, 0] });
+    expect(await engine.run('query', 'near', [1, 0, 0])).toEqual(['new']);
+  });
+
+  it('refuses two names that would share one SQLite name', () => {
+    const clash = defineSchema({ a: table<{ x: string }>({ indexes: { b_c: ['x'] } }), a_b: table<{ x: string }>({ indexes: { c: ['x'] } }) });
+    expect(() => defineData({ schema: clash, functions: () => ({}) }).engine(memoryStorage()).init()).toThrow('would share the name "i_a_b_c"');
+  });
+});
+
 describe('search and vectors', () => {
   it('ranks full text matches, matches prefixes, filters by channel, and follows edits and deletes', async () => {
     const { call } = setup();
@@ -315,6 +364,26 @@ describe('scheduler', () => {
     await engine.alarm();
     expect(await call.q('list', { channel: 'jobs', limit: 1 })).toEqual(['from a job']);
     expect(() => engine.scheduler().runAfter(0, 'missing')).toThrow(/no job named/);
+  });
+});
+
+describe('a job that takes the object down', () => {
+  it('counts the run as an attempt before the handler starts, and parks the job once they are used up', async () => {
+    const { engine, calls } = setup();
+    engine.scheduler().runAfter(0, 'hang', null, { id: 'h' });
+    const crashed = () => {
+      void engine.alarm();
+      return new Promise((r) => setTimeout(r, 5));
+    };
+    await crashed();
+    expect(engine.scheduler().get('h')).toMatchObject({ status: 'pending', attempts: 1 });
+    await crashed();
+    expect(engine.scheduler().get('h')).toMatchObject({ status: 'pending', attempts: 2 });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await crashed();
+    logged.mockRestore();
+    expect(engine.scheduler().get('h')).toMatchObject({ status: 'failed', error: expect.stringContaining('stopped before it finished') });
+    expect(calls).toEqual([]);
   });
 });
 
