@@ -91,6 +91,7 @@ type Entry = {
   generation: number;
   waitStart: number | undefined;
   guessed: boolean;
+  pending: number;
   settled: any;
 };
 
@@ -209,7 +210,10 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     e.waitStart = undefined;
     for (const s of e.stops.splice(0)) s();
     e.generation++;
-    e.inFlight = false;
+    if (e.inFlight) {
+      e.inFlight = false;
+      if (e.state.fetching) set(e, { ...e.state, fetching: false } as QueryState<any>);
+    }
   }
 
   /** Watch one query. React's `useQuery` is a thin wrapper over this. */
@@ -223,7 +227,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     const key = `${name}:${stableKey(input)}:${stableKey(topics)}`;
     let e = entries.get(key);
     if (!e) {
-      e = { key, name, input, topics, state: { status: 'loading', data: undefined, error: undefined, fetching: true }, subs: new Set(), stops: [], inFlight: false, running: undefined, dirty: false, timer: undefined, gc: undefined, generation: 0, waitStart: undefined, guessed: false, settled: undefined };
+      e = { key, name, input, topics, state: { status: 'loading', data: undefined, error: undefined, fetching: true }, subs: new Set(), stops: [], inFlight: false, running: undefined, dirty: false, timer: undefined, gc: undefined, generation: 0, waitStart: undefined, guessed: false, pending: 0, settled: undefined };
       entries.set(key, e);
       collectLater(e);
     }
@@ -268,7 +272,8 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
     input: InputOf<Procs<R>[N]>,
     mutateOptions: MutateOptions<R> = {},
   ): Promise<OutputOf<Procs<R>[N]>> {
-    const changed: Array<{ e: Entry; before: QueryState<any>; guess: QueryState<any>; wasGuessed: boolean }> = [];
+    let done = false;
+    const changed: Array<{ e: Entry; before: QueryState<any>; guess: QueryState<any>; fn: (data: any) => any }> = [];
     try {
       mutateOptions.optimistic?.({
         update(queryName, queryInput, fn) {
@@ -277,20 +282,33 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
             if (!e.key.startsWith(prefix) || e.state.data === undefined) continue;
             const before = e.state;
             const guess = { ...before, data: fn(before.data) } as QueryState<any>;
-            const wasGuessed = e.guessed;
-            if (!wasGuessed) e.settled = before.data;
+            if (!e.guessed) e.settled = before.data;
             e.guessed = true;
+            e.pending++;
             set(e, guess);
-            changed.push({ e, before, guess, wasGuessed });
+            changed.push({ e, before, guess, fn });
           }
         },
       });
-      return await options.client.call(name, input);
+      const result = await options.client.call(name, input);
+      for (const { e, fn } of changed) {
+        e.pending--;
+        const prev = e.settled;
+        try {
+          e.settled = fn(prev);
+        } catch {}
+        if (!e.pending) e.guessed = false;
+        if (e.state.status === 'error' && e.state.data === prev && e.settled !== prev) set(e, { ...e.state, data: e.settled });
+      }
+      done = true;
+      return result;
     } catch (err) {
-      for (const { e, before, guess, wasGuessed } of changed.reverse()) {
-        if (e.state !== guess) continue;
-        e.guessed = wasGuessed;
-        set(e, before);
+      if (!done) {
+        for (const { e, before, guess } of changed.reverse()) {
+          e.pending--;
+          if (e.state.data === guess.data) set(e, { ...e.state, data: before.data } as QueryState<any>);
+          if (!e.pending) e.guessed = false;
+        }
       }
       throw err;
     } finally {
@@ -318,6 +336,7 @@ export function createLive<R extends Typed = Registry<any>>(options: LiveOptions
       if (next === undefined || next === e.state.data) continue;
       // Decision: a fetch on its way may have read before this change, so fetch once more after it and it can't win.
       if (e.inFlight) e.dirty = true;
+      if (e.guessed && e.settled !== undefined) e.settled = fn(e.settled, e.input as InputOf<Procs<R>[N]>) ?? e.settled;
       set(e, { ...e.state, data: next });
     }
   }

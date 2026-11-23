@@ -339,16 +339,25 @@ describe('live store', () => {
   });
 
   describe('review fixes', () => {
-    it('refetches within maxWaitMs while events keep arriving faster than debounceMs', async () => {
-      const { call, t, live } = setup({ debounceMs: 50 });
+    it('refetches at maxWaitMs while events keep coming, then starts the wait over', async () => {
+      const { call, t, live } = setup({ debounceMs: 50, maxWaitMs: 200 });
       live.query('messages.list', { channel: 'a' }).subscribe(() => {});
-      await flush();
+      await vi.advanceTimersByTimeAsync(0);
       expect(call).toHaveBeenCalledTimes(1);
-      for (let i = 0; i < 30; i++) {
-        t.emit('messages:channel:a');
-        await vi.advanceTimersByTimeAsync(30);
-      }
-      expect(call.mock.calls.length).toBeGreaterThan(2);
+      const stream = async (from: number, to: number) => {
+        for (let at = from; at < to; at += 10) {
+          t.emit('messages:channel:a');
+          await vi.advanceTimersByTimeAsync(10);
+        }
+      };
+      await stream(0, 190);
+      expect(call).toHaveBeenCalledTimes(1);
+      await stream(190, 200);
+      expect(call).toHaveBeenCalledTimes(2);
+      await stream(200, 390);
+      expect(call).toHaveBeenCalledTimes(2);
+      await stream(390, 400);
+      expect(call).toHaveBeenCalledTimes(3);
     });
 
     it('reports a disabled, never started query as idle, and an enabled one as fetching', async () => {
@@ -390,12 +399,18 @@ describe('live store', () => {
     });
 
     it('stops when the last enabled listener leaves even if a disabled one stays, and does not collect while listeners remain', async () => {
-      const { t, live } = setup({ cacheMs: 1000 });
+      const { call, t, live } = setup({ cacheMs: 1000 });
       const on = live.query('messages.list', { channel: 'a' }).subscribe(() => {});
-      const offStop = live.query('messages.list', { channel: 'a' }, { enabled: false }).subscribe(() => {});
+      const off = live.query('messages.list', { channel: 'a' }, { enabled: false });
+      const offStop = off.subscribe(() => {});
       await flush();
       expect(t.listeners('messages:channel:a')).toBe(1);
+      call.mockImplementationOnce(() => new Promise(() => {}));
+      t.emit('messages:channel:a');
+      await flush();
+      expect(off.getSnapshot()).toMatchObject({ status: 'ready', fetching: true });
       on();
+      expect(off.getSnapshot()).toMatchObject({ status: 'ready', fetching: false });
       expect(t.listeners('messages:channel:a')).toBe(0);
       await vi.advanceTimersByTimeAsync(1500);
       expect(live.query('messages.list', { channel: 'a' }).getSnapshot().status).toBe('ready');
@@ -425,7 +440,7 @@ describe('live store', () => {
       let failList = false;
       const failSend = new Set<string>();
       const call = vi.fn(async (name: string, input: any) => {
-        await new Promise((r) => setTimeout(r, name === 'messages.send' && failSend.has(input.body) ? 50 : 100));
+        await new Promise((r) => setTimeout(r, name === 'messages.send' && failSend.has(input.body) ? 50 : name === 'messages.send' ? 200 : 100));
         if (name === 'messages.list') {
           if (failList) throw new Error('list down');
           return [...messages];
@@ -456,7 +471,48 @@ describe('live store', () => {
       await vi.advanceTimersByTimeAsync(300);
       await a;
       await vi.advanceTimersByTimeAsync(300);
+      expect(q.getSnapshot()).toMatchObject({ status: 'error', data: ['hi', 'a'] });
+    });
+
+    it('hides the guess of a mutation that is still pending when a fetch fails', async () => {
+      const { live, q, opt, failList } = slowChat();
+      await vi.advanceTimersByTimeAsync(150);
+      const sent = live.mutate('messages.send', { body: 'a' }, opt('a'));
+      failList();
+      await vi.advanceTimersByTimeAsync(20);
+      void live.refetch('messages.list');
+      await vi.advanceTimersByTimeAsync(110);
       expect(q.getSnapshot()).toMatchObject({ status: 'error', data: ['hi'] });
+      await vi.advanceTimersByTimeAsync(300);
+      await sent;
+    });
+
+    it('keeps the guess of a mutation that succeeded when nothing watched the entry and a later fetch fails', async () => {
+      const { live, stop, opt, failList } = slowChat();
+      await vi.advanceTimersByTimeAsync(150);
+      stop();
+      const sent = live.mutate('messages.send', { body: 'yo' }, opt('yo'));
+      await vi.advanceTimersByTimeAsync(250);
+      await sent;
+      failList();
+      const again = live.query('messages.list', { channel: 'a' });
+      again.subscribe(() => {});
+      await vi.advanceTimersByTimeAsync(150);
+      expect(again.getSnapshot()).toMatchObject({ status: 'error', data: ['hi', 'yo'] });
+    });
+
+    it('applies update() to the settled data too while a guess is held', async () => {
+      const { live, q, opt, failList } = slowChat();
+      await vi.advanceTimersByTimeAsync(150);
+      const sent = live.mutate('messages.send', { body: 'a' }, opt('a'));
+      live.update('messages.list', (list: string[]) => [...list, 'synced']);
+      failList();
+      await vi.advanceTimersByTimeAsync(20);
+      void live.refetch('messages.list');
+      await vi.advanceTimersByTimeAsync(110);
+      expect(q.getSnapshot()).toMatchObject({ status: 'error', data: ['hi', 'synced'] });
+      await vi.advanceTimersByTimeAsync(300);
+      await sent;
     });
 
     it('replaces a guess held by an unwatched entry when it is watched again', async () => {
@@ -464,7 +520,7 @@ describe('live store', () => {
       await vi.advanceTimersByTimeAsync(150);
       stop();
       const sent = live.mutate('messages.send', { body: 'yo' }, opt('yo'));
-      await vi.advanceTimersByTimeAsync(150);
+      await vi.advanceTimersByTimeAsync(250);
       await sent;
       const again = live.query('messages.list', { channel: 'a' });
       again.subscribe(() => {});
