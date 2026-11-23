@@ -1,4 +1,4 @@
-import type { CallResult, Exec, JsonSchema, LoadedProcedure, Registry } from '@builtbyfriends/realtime';
+import type { CallResult, Exec, JsonSchema, LoadedProcedure, Registry, ToolGateTrace } from '@builtbyfriends/realtime';
 
 export type ToolInfo = {
   name: string;
@@ -8,7 +8,18 @@ export type ToolInfo = {
   inputSchema: JsonSchema;
 };
 
-function aiProcedures(registry: Registry<any>): Array<{ p: LoadedProcedure; info: ToolInfo }> {
+type FailedCall = Extract<CallResult, { ok: false }>;
+type ErrorPayload = { code: string; message: string; issues?: FailedCall['issues'] };
+
+type ErrorBody = { error: ErrorPayload };
+
+function errorBody(failed: FailedCall): ErrorBody {
+  const error: ErrorPayload = { code: failed.code, message: failed.message };
+  if (failed.issues) {error.issues = failed.issues;}
+  return { error };
+}
+
+function aiProcedures(registry: Registry): Array<{ p: LoadedProcedure; info: ToolInfo }> {
   const out: Array<{ p: LoadedProcedure; info: ToolInfo }> = [];
   for (const p of registry.procedures.values()) {
     const t = p.decisions.aiTool;
@@ -28,12 +39,12 @@ function aiProcedures(registry: Registry<any>): Array<{ p: LoadedProcedure; info
 }
 
 /** Every procedure that chose `.aiTool()`, with its JSON Schema. */
-export function toolInfo(registry: Registry<any>): Array<ToolInfo> {
+export function toolInfo(registry: Registry): Array<ToolInfo> {
   return aiProcedures(registry).map((x) => x.info);
 }
 
 /** Tool definitions in the Anthropic Messages API shape (`tools: [...]`). */
-export function anthropicTools(registry: Registry<any>) {
+export function anthropicTools(registry: Registry) {
   return toolInfo(registry).map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
 }
 
@@ -48,7 +59,7 @@ export type ToolRunResult =
  * `needsApproval: true` returns `needs_approval` until the caller passes `approved: true`.
  */
 export async function runTool(
-  registry: Registry<any>,
+  registry: Registry,
   toolName: string,
   input: unknown,
   exec: Omit<Exec, 'surface'> & { approved?: boolean },
@@ -56,7 +67,11 @@ export async function runTool(
   const found = aiProcedures(registry).find((x) => x.info.name === toolName);
   const gate = !found ? 'unknown-tool' : !found.info.needsApproval ? 'no-approval-needed' : exec.approved ? 'approved' : 'needs-approval';
   // Decision: report the approval gate, so dev tools can show it next to the call it guards.
-  if (registry.trace?.active) {registry.trace.emit({ type: 'tool-gate', at: Date.now(), tool: toolName, ...(found ? { procedure: found.p.name } : {}), request: exec.request, input, gate });}
+  if (registry.trace?.active) {
+    const event: ToolGateTrace = { type: 'tool-gate', at: Date.now(), tool: toolName, request: exec.request, input, gate };
+    if (found) {event.procedure = found.p.name;}
+    registry.trace.emit(event);
+  }
   if (!found) {return { status: 'unknown_tool', tool: toolName };}
   if (gate === 'needs-approval') {return { status: 'needs_approval', tool: toolName, input };}
   const { approved: _a, ...rest } = exec;
@@ -64,13 +79,23 @@ export async function runTool(
 }
 
 /** The `content` string for a tool_result block: the value on success, the error otherwise. */
-export function toolResultContent(run: ToolRunResult): { content: string; is_error: boolean } {
+export type ToolResultContent = { content: string; is_error: boolean };
+
+export function toolResultContent(run: ToolRunResult): ToolResultContent {
   if (run.status === 'needs_approval') {return { content: JSON.stringify({ error: { code: 'NEEDS_APPROVAL', message: 'A person must approve this call first' } }), is_error: true };}
   if (run.status === 'unknown_tool') {return { content: JSON.stringify({ error: { code: 'UNKNOWN_TOOL', message: `No tool ${run.tool}` } }), is_error: true };}
   const r = run.result;
   if (r.ok) {return { content: JSON.stringify(r.value), is_error: false };}
-  return { content: JSON.stringify({ error: { code: r.code, message: r.message, ...(r.issues ? { issues: r.issues } : {}) } }), is_error: true };
+  return { content: JSON.stringify(errorBody(r)), is_error: true };
 }
+
+type AiSdkTool<S> = {
+  description: string;
+  inputSchema: S;
+  needsApproval: boolean;
+  // oxlint-disable-next-line quality/no-unknown-returns -- a procedure's output is typed only by the registry, which this package doesn't see
+  execute: (input: unknown) => Promise<unknown>;
+};
 
 /**
  * Tools for the Vercel AI SDK. Pass its `jsonSchema` helper so this package needs no
@@ -78,11 +103,11 @@ export function toolResultContent(run: ToolRunResult): { content: string; is_err
  * Tools that chose `needsApproval: true` set the AI SDK's `needsApproval` flag.
  */
 export function aiSdkTools<S>(
-  registry: Registry<any>,
+  registry: Registry,
   exec: Omit<Exec, 'surface'>,
-  helpers: { jsonSchema: (schema: any) => S },
+  helpers: { jsonSchema: (schema: JsonSchema) => S },
 ) {
-  const tools: Record<string, { description: string; inputSchema: S; needsApproval: boolean; execute: (input: unknown) => Promise<unknown> }> = {};
+  const tools: Record<string, AiSdkTool<S>> = {};
   for (const { p, info } of aiProcedures(registry)) {
     tools[info.name] = {
       description: info.description,
@@ -92,7 +117,7 @@ export function aiSdkTools<S>(
       execute: async (input) => {
         const r = await registry.call(p.name, input, { ...exec, surface: 'ai' });
         if (r.ok) {return r.value;}
-        return { error: { code: r.code, message: r.message, ...(r.issues ? { issues: r.issues } : {}) } };
+        return errorBody(r);
       },
     };
   }

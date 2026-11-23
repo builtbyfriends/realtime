@@ -39,12 +39,12 @@ type Via = { via?: string };
 
 /** The runtime record of every decision. Adapters and the audit read only this. */
 export type Decisions = {
-  authn: ({ kind: 'auth'; provider: AuthProvider<any, any> } & Via) | OptOut;
-  authz: ({ kind: 'policy'; policy: string; check: (ctx: any, input: any) => boolean | Promise<boolean> } & Via) | OptOut;
+  authn: ({ kind: 'auth'; provider: AuthProvider } & Via) | OptOut;
+  authz: ({ kind: 'policy'; policy: string; check: (ctx: unknown, input: unknown) => boolean | Promise<boolean> } & Via) | OptOut;
   input: ({ kind: 'schema'; schema: AnySchema } & Via) | ({ kind: 'none' } & Via);
   output: { kind: 'schema'; schema: AnySchema } & Via;
   errors: ({ kind: 'map'; map: Record<string, ErrorSpec> } & Via) | OptOut;
-  analytics: ({ kind: 'event'; event: string; props?: (input: any, ctx: any) => AnalyticsProps } & Via) | OptOut;
+  analytics: ({ kind: 'event'; event: string; props?: (input: unknown, ctx: unknown) => AnalyticsProps } & Via) | OptOut;
   mcp: ({ kind: 'tool' } & McpSpec & Via) | OptOut;
   cli: ({ kind: 'command' } & CliSpec & Via) | OptOut;
   aiTool: ({ kind: 'tool' } & AiToolSpec & Via) | OptOut;
@@ -71,7 +71,7 @@ type Init<Env, N extends string> = {
   name: N; env: Env; ctx: unknown; in: unknown; inRaw: unknown; outRaw: unknown; out: unknown; err: never; done: never;
 };
 
-type Next<S extends State, K extends Concern, P = {}> = {
+type Next<S extends State, K extends Concern, P = unknown> = {
   name: S['name'];
   env: S['env'];
   ctx: P extends { ctx: infer X } ? X : S['ctx'];
@@ -195,6 +195,7 @@ type CheckUse<S extends State, PS extends State> = [Overlap<S, PS>] extends [nev
   : { '~error': `Already decided here and in the profile: ${Join<MissingList<Exclude<Concern, Overlap<S, PS>>>>}` };
 
 export type Builder<S extends State> = Open<S, 'procedure'> & {
+  readonly '~realtime': 'builder';
   /** The gate: until every concern is decided, the parameter type is a message naming what is missing. */
   handler: (fn: [Undecided<S['done']>] extends [never] ? Handler<S> : Undecided<S['done']>) => Procedure<S>;
 };
@@ -212,12 +213,12 @@ export interface Procedure<S extends State = State> {
   readonly name: S['name'];
   readonly decisions: Decisions;
   readonly profiles: ReadonlyArray<string>;
-  readonly handler: (args: HandlerArgs<any>) => unknown;
+  readonly handler: Handler<State>;
   /** Phantom types for typed clients. Not present at runtime. */
   readonly '~types'?: { input: S['inRaw']; output: S['out']; errors: S['err'] };
 }
 
-export type AnyProcedure = Procedure<any>;
+export type AnyProcedure = Procedure;
 export type InputOf<P> = P extends Procedure<infer S> ? S['inRaw'] : never;
 export type OutputOf<P> = P extends Procedure<infer S> ? S['out'] : never;
 export type ErrorsOf<P> = P extends Procedure<infer S> ? S['err'] : never;
@@ -225,7 +226,12 @@ export type ErrorsOf<P> = P extends Procedure<infer S> ? S['err'] : never;
 // Decision: builders are immutable. Each call returns a new builder, so a partial chain can be
 // shared without leaking decisions between procedures.
 
-function make(kind: Kind, name: string, decisions: Partial<Decisions>, profiles: Array<string>): any {
+type RuntimeNode = { readonly '~realtime': 'builder' | 'profile' };
+
+function make<S extends State>(kind: 'procedure', name: string, decisions: Partial<Decisions>, profiles: Array<string>): Builder<S>;
+function make<S extends State>(kind: 'profile', name: string, decisions: Partial<Decisions>, profiles: Array<string>): Profile<S>;
+function make(kind: Kind, name: string, decisions: Partial<Decisions>, profiles: Array<string>): Builder<State> | Profile<State>;
+function make(kind: Kind, name: string, decisions: Partial<Decisions>, profiles: Array<string>): RuntimeNode {
   const label = kind === 'profile' ? `profile "${name}"` : `procedure "${name}"`;
   const decide = <C extends Concern>(c: C, d: Decisions[C]) => {
     const existing = decisions[c];
@@ -235,7 +241,7 @@ function make(kind: Kind, name: string, decisions: Partial<Decisions>, profiles:
     }
     return make(kind, name, { ...decisions, [c]: d }, profiles);
   };
-  const optOut = (c: Concern) => (opt: { reason: string }) => decide(c, { kind: 'none', reason: opt?.reason } as any);
+  const optOut = (c: Concern) => (opt: { reason: string }) => decide(c, { kind: 'none', reason: opt?.reason });
 
   const methods = {
     auth: (provider: AuthProvider) => decide('authn', { kind: 'auth', provider }),
@@ -248,7 +254,8 @@ function make(kind: Kind, name: string, decisions: Partial<Decisions>, profiles:
     output: (schema: AnySchema) => decide('output', { kind: 'schema', schema }),
     errors: (map: Record<string, ErrorSpec>) => decide('errors', { kind: 'map', map }),
     noErrors: optOut('errors'),
-    analytics: (spec: { event: string; props?: any }) => decide('analytics', { kind: 'event', ...spec }),
+    analytics: (spec: { event: string; props?: (input: unknown, ctx: unknown) => AnalyticsProps }) =>
+      decide('analytics', { kind: 'event', ...spec }),
     noAnalytics: optOut('analytics'),
     mcp: (spec: McpSpec) => decide('mcp', { kind: 'tool', ...spec }),
     noMcp: optOut('mcp'),
@@ -263,26 +270,32 @@ function make(kind: Kind, name: string, decisions: Partial<Decisions>, profiles:
         const d = profile.decisions[c];
         if (!d) {continue;}
         if (merged[c]) {throw new Error(`${label}: ${c} is decided here and in profile "${profile.name}"`);}
-        (merged as any)[c] = { ...d, via: d.via ?? profile.name };
+        setDecision(merged, c, { ...d, via: d.via ?? profile.name });
       }
       return make(kind, name, merged, [...profiles, profile.name]);
     },
   };
 
   if (kind === 'profile') {
-    return { ...methods, '~realtime': 'profile', '~state': undefined, name, decisions };
+    const node = { ...methods, '~realtime': 'profile', '~state': undefined, name, decisions } as const;
+    return node;
   }
-  return {
+  const node = {
     ...methods,
     '~realtime': 'builder',
     name,
-    handler: (fn: (args: HandlerArgs<any>) => unknown) => {
+    handler: (fn: Handler<State>) => {
       if (typeof fn !== 'function') {throw new Error(`${label}: handler() needs a function`);}
       // Decision: completeness is checked when the registry loads, so the error lists each problem at
       // once and also covers code that skipped the type checker.
       return Object.freeze({ '~realtime': 'procedure', name, decisions: { ...decisions }, profiles, handler: fn });
     },
-  };
+  } as const;
+  return node;
+}
+
+function setDecision<C extends Concern>(target: Partial<Decisions>, c: C, d: Decisions[C]): void {
+  target[c] = d;
 }
 
 /** Typed entry points for one Worker. `Env` types `env` in handlers and providers. */

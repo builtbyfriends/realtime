@@ -1,5 +1,5 @@
 import { CONCERNS } from './builder.js';
-import type { AnyProcedure, AnalyticsProps, Concern, Decisions, Surface } from './builder.js';
+import type { AnyProcedure, AnalyticsProps, AuthProvider, Concern, Decisions, Surface } from './builder.js';
 import { BUILTIN_ERRORS, ProcedureError, builtinFailure } from './errors.js';
 import type { ErrorSpec, Failure } from './errors.js';
 import { reasonProblem } from './reason.js';
@@ -19,7 +19,7 @@ export type AnalyticsEvent = {
   props: AnalyticsProps;
 };
 
-export interface AnalyticsProvider<Env = any> {
+export interface AnalyticsProvider<Env = unknown> {
   readonly name: string;
   track(event: AnalyticsEvent, env: Env): void | Promise<void>;
 }
@@ -125,6 +125,8 @@ export interface Registry<P extends ReadonlyArray<AnyProcedure> = ReadonlyArray<
   readonly '~procedures'?: ProcMap<P>;
 }
 
+type CallerContext = Awaited<ReturnType<AuthProvider['resolve']>>;
+
 const NAME_RE = /^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*)*$/;
 const CODE_RE = /^[A-Z][A-Z0-9_]*$/;
 const COMMAND_RE = /^[a-z][a-z0-9-]*( [a-z][a-z0-9-]*)*$/;
@@ -150,7 +152,7 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
     const label = typeof p?.name === 'string' ? `"${p.name}"` : `#${index}`;
     if (!p || p['~realtime'] !== 'procedure') {
       problems.push(
-        (p as any)?.['~realtime'] === 'builder'
+        realtimeKind(p) === 'builder'
           ? `${label}: not finished; decide every concern and call .handler(fn)`
           : `${label}: not a procedure (build it with procedure(name)... .handler(fn))`,
       );
@@ -218,7 +220,10 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
 
     // Decision: convert JSON Schema now, so a schema that can't be expressed fails the deploy and
     // not the first tools/list call.
-    const exposed = EXPOSED.some((c) => (d[c] as { kind?: string } | undefined)?.kind && (d[c] as any).kind !== 'none');
+    const exposed = EXPOSED.some((c) => {
+      const kind = d[c]?.kind;
+      return Boolean(kind) && kind !== 'none';
+    });
     const jsonSchema = { input: null as JsonSchema | null, output: null as JsonSchema | null };
     for (const io of ['input', 'output'] as const) {
       const dec = d[io];
@@ -226,7 +231,9 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
       try {
         jsonSchema[io] = toJsonSchema(dec.schema, io);
       } catch (error) {
-        if (exposed || (io === 'input' && d.cli?.kind === 'command')) problems.push(`${label}: ${io} schema: ${(error as Error).message}`);
+        if (exposed || (io === 'input' && d.cli?.kind === 'command')) {
+          problems.push(`${label}: ${io} schema: ${errorMessage(error)}`);
+        }
       }
     }
     if (exposed && d.input?.kind === 'schema' && jsonSchema.input && jsonSchema.input.type !== 'object') {
@@ -234,8 +241,10 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
     }
 
     const toolName = p.name.replaceAll('.', '_');
-    if (toolNames.has(toolName) && toolNames.get(toolName) !== p.name)
-      {problems.push(`${label}: tool name ${toolName} collides with "${toolNames.get(toolName)}"`);}
+    const sameTool = toolNames.get(toolName);
+    if (sameTool !== undefined && sameTool !== p.name) {
+      problems.push(`${label}: tool name ${toolName} collides with "${sameTool}"`);
+    }
     toolNames.set(toolName, p.name);
 
     if (problems.length === before) {
@@ -280,7 +289,10 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
       // Decision: concerns the call never reached still show, so a trace has each decision.
       const seen = new Set(steps.map((s) => s.concern));
       const surface = SURFACE_CONCERN[exec.surface];
-      for (const c of TRACE_ORDER) {if (!seen.has(c) && (c === 'handler' || !EXPOSED.includes(c) || c === surface)) steps.push({ concern: c, status: 'unreached', decision: c === 'handler' ? 'your code' : describe(c, proc.decisions[c]) });}
+      for (const c of TRACE_ORDER) {
+        if (seen.has(c) || (c !== 'handler' && EXPOSED.includes(c) && c !== surface)) {continue;}
+        steps.push({ concern: c, status: 'unreached', decision: c === 'handler' ? 'your code' : describe(c, proc.decisions[c]) });
+      }
       steps.sort((a, b) => TRACE_ORDER.indexOf(a.concern) - TRACE_ORDER.indexOf(b.concern));
     }
     emit({ type: 'call', id: ++traceSeq, at, procedure: name, surface: exec.surface, request: exec.request, input: rawInput, result, steps, durationMs: Date.now() - at });
@@ -289,25 +301,29 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
 
   async function run(name: string, rawInput: unknown, exec: Exec, steps: Array<TraceStep> | null): Promise<CallResult> {
     const proc = loaded.get(name);
-    if (!proc) {return builtinFailure('NOT_FOUND_PROCEDURE');}
+    const handler = handlers.get(name);
+    if (!proc || !handler) {return builtinFailure('NOT_FOUND_PROCEDURE');}
     const d = proc.decisions;
     const info = (stage: string) => ({ procedure: name, surface: exec.surface, stage });
-    const waitUntil = exec.waitUntil ?? ((p: Promise<unknown>) => void p.catch((error) => onError(error, info('waitUntil'))));
+    const waitUntil = exec.waitUntil ?? ((p: Promise<unknown>) => void p.catch((error: unknown) => onError(error, info('waitUntil'))));
     let mark = Date.now();
     const step = (concern: TraceConcern, status: TraceStep['status'], detail?: string) => {
       if (!steps) {return;}
       const now = Date.now();
       const dec = concern === 'handler' ? null : d[concern];
-      const off = !!dec && (dec as { kind: string }).kind === 'none' && status === 'pass';
+      const off = !!dec && dec.kind === 'none' && status === 'pass';
+      const entry: TraceStep = { concern, status: off ? 'off' : status, decision: dec && concern !== 'handler' ? describe(concern, dec) : 'your code' };
       // Decision: an opt-out's reason is already in the decision text, so it gets no separate detail.
-      steps.push({ concern, status: off ? 'off' : status, decision: dec ? describe(concern as Concern, dec) : 'your code', ...(detail && !off ? { detail } : {}), ms: now - mark });
+      if (detail && !off) {entry.detail = detail;}
+      entry.ms = now - mark;
+      steps.push(entry);
       mark = now;
     };
 
     const surfaceConcern = SURFACE_CONCERN[exec.surface];
     if (surfaceConcern) {step(surfaceConcern, 'pass', `called over ${exec.surface}`);}
 
-    let ctx: unknown = null;
+    let ctx: CallerContext;
     if (d.authn.kind === 'auth') {
       try {
         ctx = await d.authn.provider.resolve(exec.request, exec.env);
@@ -316,13 +332,16 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
         step('authn', 'fail', 'provider threw: 500 INTERNAL');
         return builtinFailure('INTERNAL');
       }
-      if (ctx == null) {
+      if (ctx === null || ctx === undefined) {
         step('authn', 'fail', 'no caller: 401 UNAUTHENTICATED');
         return builtinFailure('UNAUTHENTICATED');
       }
       const actor = d.authn.provider.actorId?.(ctx);
       step('authn', 'pass', actor ? `actor ${actor}` : 'signed in');
-    } else {step('authn', 'pass', d.authn.reason);}
+    } else {
+      ctx = null;
+      step('authn', 'pass', d.authn.reason);
+    }
 
     let input: unknown = undefined;
     if (d.input.kind === 'schema') {
@@ -340,7 +359,7 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
 
     // Decision: authorization runs after input, so policies can check ownership.
     if (d.authz.kind === 'policy') {
-      let allowed = false;
+      let allowed: boolean;
       try {
         allowed = (await d.authz.check(ctx, input)) === true;
       } catch (error) {
@@ -358,7 +377,7 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
     const started = Date.now();
     let result: CallResult;
     try {
-      const value = await handlers.get(name)!({
+      const value = await handler({
         input,
         ctx,
         env: exec.env,
@@ -395,7 +414,7 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
       } else {
         onError(error, info('handler'));
         result = builtinFailure('INTERNAL');
-        const why = error instanceof ProcedureError ? `fail('${error.code}') is not declared` : `threw ${(error as Error)?.message ?? String(error)}`;
+        const why = error instanceof ProcedureError ? `fail('${error.code}') is not declared` : `threw ${errorMessage(error)}`;
         step('handler', 'fail', `${why}: 500 INTERNAL`);
       }
     }
@@ -410,43 +429,27 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
       } catch (error) {
         onError(error, info('analytics.props'));
       }
-      const actorId = d.authn.kind === 'auth' && ctx != null ? d.authn.provider.actorId?.(ctx) : undefined;
+      const actorId = d.authn.kind === 'auth' && ctx !== null && ctx !== undefined ? d.authn.provider.actorId?.(ctx) : undefined;
       const event: AnalyticsEvent = {
         event: spec.event,
         procedure: name,
         surface: exec.surface,
         outcome: result.ok ? 'ok' : 'error',
-        ...(result.ok ? {} : { code: result.code }),
         status: result.status,
         durationMs: Date.now() - started,
-        ...(actorId ? { actorId } : {}),
         props,
       };
+      if (!result.ok) {event.code = result.code;}
+      if (actorId) {event.actorId = actorId;}
       step('analytics', 'pass', `${spec.event} ${JSON.stringify(props)}`);
       waitUntil(
         Promise.resolve()
           .then(() => provider.track(event, exec.env))
-          .catch((error) => onError(error, info('analytics'))),
+          .catch((error: unknown) => onError(error, info('analytics'))),
       );
-    } else {step('analytics', 'pass', (d.analytics as { reason?: string }).reason);}
+    } else {step('analytics', 'pass', 'reason' in d.analytics ? d.analytics.reason : undefined);}
     return result;
   }
-
-  const describe = (c: Concern, dec: any): string => {
-    const via = dec.via ? ` [${dec.via}]` : '';
-    if (dec.kind === 'none') {return (c === 'input' ? 'none' : `none: ${dec.reason}`) + via;}
-    switch (c) {
-      case 'authn': return `auth(${dec.provider.name ?? 'unnamed'})${via}`;
-      case 'authz': return `policy(${dec.policy})${via}`;
-      case 'input':
-      case 'output': return `schema(${dec.schema['~standard'].vendor})${via}`;
-      case 'errors': return `${Object.keys(dec.map).sort().join(' ')}${via}`;
-      case 'analytics': return `event(${dec.event})${via}`;
-      case 'mcp': return `tool(${dec.effect})${via}`;
-      case 'cli': return `command(${dec.command})${via}`;
-      case 'aiTool': return `tool(${dec.needsApproval ? 'needs approval' : 'no approval'})${via}`;
-    }
-  };
 
   const audit = (): Array<AuditRow> =>
     [...loaded.values()]
@@ -454,7 +457,15 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
       .map((p) => ({
         procedure: p.name,
         profiles: p.profiles.join(', ') || '-',
-        ...(Object.fromEntries(CONCERNS.map((c) => [c, describe(c, p.decisions[c])])) as Record<Concern, string>),
+        authn: describe('authn', p.decisions.authn),
+        authz: describe('authz', p.decisions.authz),
+        input: describe('input', p.decisions.input),
+        output: describe('output', p.decisions.output),
+        errors: describe('errors', p.decisions.errors),
+        analytics: describe('analytics', p.decisions.analytics),
+        mcp: describe('mcp', p.decisions.mcp),
+        cli: describe('cli', p.decisions.cli),
+        aiTool: describe('aiTool', p.decisions.aiTool),
       }));
 
   return {
@@ -475,29 +486,59 @@ export function defineRegistry<const P extends ReadonlyArray<AnyProcedure>>(
     audit,
     auditTable() {
       const cols = ['procedure', 'profiles', ...CONCERNS] as const;
-      const esc = (s: string) => s.replaceAll('|', String.raw`\|`);
       const rows = audit().map((r) => `| ${cols.map((c) => esc(r[c])).join(' | ')} |`);
       return [`| ${cols.join(' | ')} |`, `|${cols.map(() => ' --- ').join('|')}|`, ...rows].join('\n') + '\n';
     },
     manifest(basePath = '/rpc') {
       return {
         version: 1,
-        procedures: [...loaded.values()]
-          .filter((p) => p.decisions.cli.kind === 'command')
-          .map((p) => {
-            const cli = p.decisions.cli as Extract<Decisions['cli'], { kind: 'command' }>;
-            return {
+        procedures: [...loaded.values()].flatMap((p) => {
+          const cli = p.decisions.cli;
+          if (cli.kind !== 'command') {return [];}
+          return [
+            {
               name: p.name,
               path: `${basePath}/${p.name}`,
               input: p.jsonSchema.input,
               output: p.jsonSchema.output,
               errors: { ...p.errors },
               cli: { command: cli.command, description: cli.description },
-            };
-          }),
+            },
+          ];
+        }),
       };
     },
   };
+}
+
+const esc = (s: string) => s.replaceAll('|', String.raw`\|`);
+
+function describe(c: Concern, dec: Decisions[Concern]): string {
+  const via = dec.via ? ` [${dec.via}]` : '';
+  switch (dec.kind) {
+    case 'none': {
+      const reason = 'reason' in dec ? dec.reason : undefined;
+      return (c === 'input' ? 'none' : `none: ${reason}`) + via;
+    }
+    case 'auth': return `auth(${dec.provider.name ?? 'unnamed'})${via}`;
+    case 'policy': return `policy(${dec.policy})${via}`;
+    case 'schema': return `schema(${dec.schema['~standard'].vendor})${via}`;
+    case 'map': return `${Object.keys(dec.map).sort().join(' ')}${via}`;
+    case 'event': return `event(${dec.event})${via}`;
+    case 'tool': return ('effect' in dec ? `tool(${dec.effect})` : `tool(${dec.needsApproval ? 'needs approval' : 'no approval'})`) + via;
+    case 'command': return `command(${dec.command})${via}`;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'message' in error) {return String(error.message);}
+  return String(error);
+}
+
+function realtimeKind(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || !('~realtime' in value)) {return undefined;}
+  const kind = value['~realtime'];
+  return typeof kind === 'string' ? kind : undefined;
 }
 
 function isEmpty(v: unknown): boolean {

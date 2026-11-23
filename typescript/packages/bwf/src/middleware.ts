@@ -1,4 +1,3 @@
-/// <reference path="./virtual.d.ts" />
 import { rpcHandler } from '@builtbyfriends/realtime-http';
 import { mcpHandler } from '@builtbyfriends/realtime-mcp';
 import { anthropicTools, runTool, toolResultContent } from '@builtbyfriends/realtime-ai';
@@ -19,9 +18,9 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 // Decision: bwf's defineMiddleware() is an identity function that adds types, so this file doesn't
 // import bwf at all and works the same whatever the host package is called.
-type HostContext = { req: { raw: Request }; env: any; executionCtx: { waitUntil(p: Promise<unknown>): void } };
+type HostContext = { req: { raw: Request }; env: unknown; executionCtx: { waitUntil(p: Promise<unknown>): void } };
 
-export default async (c: HostContext, next: () => Promise<unknown>): Promise<Response | void> => {
+export default async (c: HostContext, next: () => Promise<void>): Promise<Response | void> => {
   const request = c.req.raw;
   const waitUntil = (p: Promise<unknown>) => c.executionCtx.waitUntil(p);
   if (devtools?.serves(new URL(request.url).pathname)) {return devtools.serve(request);}
@@ -30,8 +29,15 @@ export default async (c: HostContext, next: () => Promise<unknown>): Promise<Res
   await next();
 };
 
+type RunBody = { tool: string; input: unknown; approved: boolean };
+
+function readRunBody(value: unknown): RunBody | null {
+  if (typeof value !== 'object' || value === null || !('tool' in value) || typeof value.tool !== 'string' || !value.tool) {return null;}
+  return { tool: value.tool, input: 'input' in value ? value.input : undefined, approved: 'approved' in value && value.approved === true };
+}
+
 // Decision: null means "not ours", so bwf carries on to its own routes.
-async function handle(request: Request, env: any, waitUntil: (p: Promise<unknown>) => void): Promise<Response | null> {
+async function handle(request: Request, env: unknown, waitUntil: (p: Promise<unknown>) => void): Promise<Response | null> {
   const path = new URL(request.url).pathname;
   const ctx = { waitUntil };
 
@@ -41,9 +47,9 @@ async function handle(request: Request, env: any, waitUntil: (p: Promise<unknown
   // anthropicTools(registry) and runTool(...) from @builtbyfriends/realtime-ai directly.
   if (path === `${app.basePath}/ai/tools.json` && request.method === 'GET') {return new Response(tools, { headers: { 'content-type': 'application/json' } });}
   if (path === `${app.basePath}/ai/run` && request.method === 'POST') {
-    const body = (await request.json().catch(() => null)) as { tool?: string; input?: unknown; approved?: boolean } | null;
-    if (!body?.tool) {return json({ error: { code: 'INVALID_INPUT', message: 'Send { tool, input, approved? }' } }, 400);}
-    const run = await runTool(registry, body.tool, body.input, { request, env, waitUntil, approved: body.approved === true });
+    const body = readRunBody(await request.json().catch(() => null));
+    if (!body) {return json({ error: { code: 'INVALID_INPUT', message: 'Send { tool, input, approved? }' } }, 400);}
+    const run = await runTool(registry, body.tool, body.input, { request, env, waitUntil, approved: body.approved });
     return json({ status: run.status, tool_result: toolResultContent(run) });
   }
 

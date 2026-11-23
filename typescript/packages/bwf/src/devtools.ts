@@ -45,14 +45,32 @@ const headers = (h: Headers) => {
   return out;
 };
 
-function parseBody(text: string, contentType: string | null): unknown {
+type Body = string | number | boolean | object | null | undefined;
+
+const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+
+function errorMessage(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'message' in error) {return String(error.message);}
+  return String(error);
+}
+
+const isBody = (value: unknown): value is Body =>
+  value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || typeof value === 'object';
+
+function parseJson(text: string): Body {
+  const value: unknown = JSON.parse(text);
+  if (isBody(value)) {return value;}
+  throw new TypeError('not a JSON value');
+}
+
+function parseBody(text: string, contentType: string | null): Body {
   if (!text) {return undefined;}
   if (contentType?.includes('text/event-stream')) {
-    const events: Array<unknown> = [];
+    const events: Array<Body> = [];
     const parser = createParser({
       onEvent: ({ data }) => {
         try {
-          events.push(JSON.parse(data));
+          events.push(parseJson(data));
         } catch {
           events.push(data);
         }
@@ -63,7 +81,7 @@ function parseBody(text: string, contentType: string | null): unknown {
     return { sse: events };
   }
   try {
-    return JSON.parse(text);
+    return parseJson(text);
   } catch {
     return text.length > 20_000 ? `${text.slice(0, 20_000)}… (${text.length} chars)` : text;
   }
@@ -137,14 +155,12 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
       touch(ex);
       return res;
     } catch (error) {
-      ex.error = (error as Error)?.message ?? String(error);
+      ex.error = errorMessage(error);
       ex.ms = Date.now() - ex.at;
       touch(ex);
       throw error;
     }
   };
-
-  const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
   const registryInfo = () => ({
     app,
@@ -183,10 +199,9 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
       const kind = kindOf(url.pathname);
       if (!kind) {return run();}
       const reqText = request.method === 'GET' || request.method === 'HEAD' ? '' : await request.clone().text().catch(() => '');
-      const ex = add({
+      const entry: Omit<Exchange, 'id' | 'rev'> = {
         at: Date.now(),
         kind,
-        ...(kind === 'rpc' ? { surface: request.headers.get('x-realtime-surface') === 'cli' ? 'cli' : 'http' } : {}),
         method: request.method,
         url: request.url,
         path: url.pathname,
@@ -194,7 +209,9 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
         reqBody: parseBody(reqText, request.headers.get('content-type')),
         calls: [],
         gates: [],
-      });
+      };
+      if (kind === 'rpc') {entry.surface = request.headers.get('x-realtime-surface') === 'cli' ? 'cli' : 'http';}
+      const ex = add(entry);
       byRequest.set(request, ex);
       try {
         const res = await run();
@@ -218,7 +235,7 @@ export function createDevtools(registry: Registry, app: { name: string; basePath
         touch(ex);
         return res;
       } catch (error) {
-        ex.error = (error as Error)?.message ?? String(error);
+        ex.error = errorMessage(error);
         ex.ms = Date.now() - ex.at;
         touch(ex);
         throw error;

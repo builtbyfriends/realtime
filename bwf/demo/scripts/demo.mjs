@@ -12,11 +12,10 @@ const h = (title) => console.log(`\n${'='.repeat(78)}\n${title}\n${'='.repeat(78
 const show = (label, value) => console.log(`\n$ ${label}\n${typeof value === 'string' ? value.trimEnd() : JSON.stringify(value, null, 2)}`);
 
 async function call(name, body, token, method = 'POST') {
-  const res = await fetch(`${base}/rpc/${name}`, {
-    method,
-    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
-    ...(method === 'POST' ? { body: body === undefined ? '' : JSON.stringify(body) } : {}),
-  });
+  const authorization = token ? { authorization: `Bearer ${token}` } : undefined;
+  const init = { method, headers: { 'content-type': 'application/json', ...authorization } };
+  if (method === 'POST') {init.body = body === undefined ? '' : JSON.stringify(body);}
+  const res = await fetch(`${base}/rpc/${name}`, init);
   const text = await res.text();
   let json;
   try { json = JSON.parse(text); } catch { json = text; }
@@ -37,8 +36,11 @@ try {
     base = `http://localhost:${port}`;
     for (let i = 0; ; i++) {
       if (i > 90) {throw new Error(`vite dev did not start:\n${devLog}`);}
-      try { if ((await call('status')).status === 200) {break;} } catch {}
-      await new Promise((r) => setTimeout(r, 500));
+      const ready = await call('status').then((r) => r.status === 200, () => false);
+      if (ready) {break;}
+      await new Promise((resolve) => {
+        setTimeout(resolve, 500);
+      });
     }
   }
   console.log(`bwf dev server: ${base}`);
@@ -121,7 +123,9 @@ try {
   show('GET /rpc/audit.md  (dev only)', audit);
 
   h('7. Analytics: one event per call that reached the handler (dev also logs them)');
-  await new Promise((r) => setTimeout(r, 300));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 300);
+  });
   const events = devLog.split('\n').filter((l) => l.startsWith('[analytics]')).map((l) => JSON.parse(l.slice(12)));
   if (dev) {show('events logged by the dev server (Analytics Engine gets the same ones)', events.map((e) => `${e.event.padEnd(18)} ${e.surface.padEnd(4)} ${e.outcome.padEnd(5)} ${String(e.status).padEnd(4)} actor=${e.actorId ?? '-'} ${JSON.stringify(e.props)}`).join('\n'));}
   else {console.log('\n(start the demo without BASE to capture the dev server log)');}

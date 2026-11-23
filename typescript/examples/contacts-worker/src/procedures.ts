@@ -9,9 +9,11 @@ export type Env = {
 
 const { procedure, profile } = createProcedures<Env>();
 
+const Tokens = z.record(z.string(), z.object({ id: z.string(), orgId: z.string(), role: z.enum(['admin', 'member']) }));
+
 const apiToken = bearerAuth<User, Env>({
   name: 'api-token',
-  verify: (token, env) => (JSON.parse(env.API_TOKENS) as Record<string, User>)[token] ?? null,
+  verify: (token, env) => Tokens.parse(JSON.parse(env.API_TOKENS))[token] ?? null,
   actorId: (u) => u.id,
 });
 const session = anyOf('session-or-token', apiToken);

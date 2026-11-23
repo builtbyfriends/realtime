@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { startFakeModel } from './fake-model.mjs';
@@ -19,9 +19,10 @@ const stop = () => { dev.kill('SIGTERM'); model.server.close(); };
 process.on('SIGINT', () => { stop(); process.exit(0); });
 
 const post = async (path, body, token, headers = {}) => {
+  const authorization = token ? { authorization: `Bearer ${token}` } : undefined;
   const res = await fetch(`${base}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers },
+    headers: { 'content-type': 'application/json', ...authorization, ...headers },
     body: body === undefined ? '' : JSON.stringify(body),
   });
   return { status: res.status, body: await res.json().catch(() => null) };
@@ -32,8 +33,11 @@ const step = (s) => console.log(`  ${s}`);
 try {
   for (let i = 0; ; i++) {
     if (i > 90) {throw new Error(`vite dev did not start:\n${log}`);}
-    try { if ((await fetch(`${base}/rpc/status`, { method: 'POST' })).ok) {break;} } catch {}
-    await new Promise((r) => setTimeout(r, 500));
+    const ready = await fetch(`${base}/rpc/status`, { method: 'POST' }).then((res) => res.ok, () => false);
+    if (ready) {break;}
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   await fetch(`${base}/__realtime/clear`, { method: 'POST' });
 
@@ -52,7 +56,7 @@ try {
   step('CLI: the real realtime CLI, built from the manifest');
   if (!existsSync(`${root}.cli/realtime.mjs`)) {execFileSync('node', ['scripts/build-cli.mjs'], { cwd: root, stdio: 'ignore' });}
   for (const args of [['whoami'], ['contacts', 'search', '--org-id', 'o1', '--query', 'a', '--limit', '2'], ['contacts', 'get', '--org-id', 'o2', '--id', 'c3']]) {
-    try { execFileSync('node', ['.cli/realtime.mjs', ...args], { cwd: root, env: { ...process.env, REALTIME_URL: base, REALTIME_TOKEN: 'demo-bob' }, stdio: 'ignore' }); } catch {}
+    spawnSync('node', ['.cli/realtime.mjs', ...args], { cwd: root, env: { ...process.env, REALTIME_URL: base, REALTIME_TOKEN: 'demo-bob' }, stdio: 'ignore' });
   }
 
   step('MCP: a real client lists tools and calls three of them');

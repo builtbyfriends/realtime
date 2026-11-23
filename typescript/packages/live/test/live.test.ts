@@ -135,7 +135,7 @@ describe('live store', () => {
 
   it('drops a subscription that resolves after the watcher left', async () => {
     const { t, live } = setup();
-    const slow: LiveTransport = { ...t.transport, subscribe: (topic, cb) => new Promise((res) => setTimeout(() => res(t.transport.subscribe(topic, cb) as any), 200)) };
+    const slow: LiveTransport = { ...t.transport, subscribe: (topic, cb) => new Promise((res) => setTimeout(() => res(t.transport.subscribe(topic, cb)), 200)) };
     const l = createLive<any>({ client: { call: async () => 1 }, transport: slow, topics: { x: () => ['t'] } });
     const stop = l.query('x', {}).subscribe(() => {});
     stop();

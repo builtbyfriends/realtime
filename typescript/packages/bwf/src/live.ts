@@ -11,13 +11,17 @@ export type ConnectLiveStream = (
     retryDelay?: number;
     headers?: HeadersInit | (() => HeadersInit | Promise<HeadersInit>);
     fetch?: typeof fetch;
+    // oxlint-disable-next-line typescript/no-explicit-any -- stands in for the host's own EventSource type, which this package can't import
     eventSource?: new (url: string, init?: { withCredentials?: boolean }) => any;
-    onError?: (error: any) => void;
+    onError?: (error: unknown) => void;
   },
 ) => {
-  subscribe(options: { id: string; topic: string; onEvent?: (event: any) => void }): Promise<() => Promise<void>>;
+  subscribe(options: { id: string; topic: string; onEvent?: (event: unknown) => void }): Promise<() => Promise<void>>;
   close(): void;
 };
+
+type StreamSource = { addEventListener(type: string, listener: () => void): void };
+type StreamSourceConstructor = new (url: string, init?: { withCredentials?: boolean }) => StreamSource;
 
 export type BwfTransportOptions = {
   /** `connectLiveStream` from `@builtbyfriends/bwf/live/client`. */
@@ -53,16 +57,19 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
 
   function open() {
     if (stream) {return stream;}
-    const Native = (options.headers
+    const Native: StreamSourceConstructor | undefined = options.headers
       ? fetchEventSource({ headers: options.headers, fetch: options.fetch })
-      : (globalThis as any).EventSource) as new (url: string, init?: { withCredentials?: boolean }) => any;
+      : globalThis.EventSource;
     if (!Native) {throw new Error('EventSource is not available here; live queries need a browser (or a polyfill)');}
     // Decision: bwf opens a fresh EventSource for each reconnect, so count `open` events across all of them.
     class Watching extends Native {
       constructor(url: string, init?: { withCredentials?: boolean }) {
         super(url, init);
         this.addEventListener('open', () => {
-          if (++opens > 1) {for (const cb of [...reconnects]) cb();}
+          if (++opens > 1) {
+            // oxlint-disable-next-line unicorn/no-useless-spread -- a callback may unsubscribe while the loop runs, so it walks a copy
+            for (const cb of [...reconnects]) {cb();}
+          }
         });
       }
     }
@@ -100,6 +107,7 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
           id: topic,
           topic,
           onEvent: () => {
+            // oxlint-disable-next-line unicorn/no-useless-spread -- a listener may unsubscribe while the loop runs, so it walks a copy
             for (const listener of [...listeners]) {listener();}
           },
         });

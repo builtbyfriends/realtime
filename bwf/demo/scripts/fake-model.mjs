@@ -43,7 +43,9 @@ export function startFakeModel(port = 0) {
       setTimeout(() => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(reply(content, stop, body.messages))), 120 + Math.random() * 200);
     });
   });
-  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, url: `http://127.0.0.1:${server.address().port}` })));
+  return new Promise((resolve) => {
+    server.listen(port, '127.0.0.1', () => resolve({ server, url: `http://127.0.0.1:${server.address().port}` }));
+  });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

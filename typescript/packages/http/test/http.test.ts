@@ -69,7 +69,7 @@ describe('typed client', () => {
   });
 
   it('throws RpcError with the code', async () => {
-    const err = await client.call('contacts.get', { orgId: 'o1', id: 'missing' }).catch((error) => error);
+    const err = await client.call('contacts.get', { orgId: 'o1', id: 'missing' }).catch((error: unknown) => error);
     expect(err).toBeInstanceOf(RpcError);
     expect(err).toMatchObject({ code: 'NOT_FOUND', status: 404 });
   });

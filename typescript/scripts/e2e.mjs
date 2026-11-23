@@ -25,10 +25,11 @@ dev.stderr.on('data', (d) => (log += d));
 try {
   for (let i = 0; ; i++) {
     if (i > 60) {throw new Error(`wrangler dev did not start:\n${log}`);}
-    try {
-      if ((await fetch(`${base}/rpc/status`, { method: 'POST' })).ok) {break;}
-    } catch {}
-    await new Promise((r) => setTimeout(r, 500));
+    const ready = await fetch(`${base}/rpc/status`, { method: 'POST' }).then((res) => res.ok, () => false);
+    if (ready) {break;}
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   console.log(`wrangler dev on ${base}`);
   const post = (name, body, token) =>

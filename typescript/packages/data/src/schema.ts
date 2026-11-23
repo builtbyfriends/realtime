@@ -1,6 +1,10 @@
 import type { AnySchema } from '@builtbyfriends/realtime';
 import type { SyncDef } from './changes.js';
 
+export type JsonValue = string | number | boolean | null | undefined | ReadonlyArray<JsonValue> | { [key: string]: JsonValue };
+export type JsonObject = { [key: string]: JsonValue };
+
+// oxlint-disable-next-line typescript/no-explicit-any -- generic bound
 export type TableDef<D = any> = {
   /** Optional Standard Schema (zod, valibot, arktype) checked on every insert and replace. */
   schema?: AnySchema;
@@ -21,7 +25,7 @@ export type TableDef<D = any> = {
 export type Schema = Record<string, TableDef>;
 
 /** Declares a table. `table<Message>({...})` types every read and write. */
-// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-values
+// oxlint-disable-next-line typescript/no-explicit-any, quality/no-unsafe-dictionary-type -- generic bound
 export function table<D extends Record<string, any> = Record<string, any>>(def: Omit<TableDef<D>, '~doc'> = {}): TableDef<D> {
   return def;
 }

@@ -8,7 +8,7 @@ import { memoryStorage } from '../../data/test/storage.js';
 
 function fakeHost() {
   const subs = new Map<string, Map<string, (event: any) => void>>();
-  const sources: any[] = [];
+  const sources: Array<any> = [];
   const connect: ConnectLiveStream = (_url, options) => {
     const open = () => {
       const source = new options!.eventSource!('/live?connectionId=x', { withCredentials: true });

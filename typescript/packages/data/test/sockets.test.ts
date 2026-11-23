@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defineData, defineSchema, SyncSockets, table } from '../src/index.js';
+import type { SocketIdentity } from '../src/index.js';
 import { memoryStorage } from './storage.js';
 
 const schema = defineSchema({
@@ -10,10 +11,10 @@ function setup() {
   const data = defineData({ schema, functions: ({ mutation }) => ({ add: mutation((ctx, a: { room: string; text: string }) => ctx.db.insert('notes', a)) }) });
   const engine = data.engine(memoryStorage());
   engine.init();
-  const all: Array<{ tags: string[]; ws: ReturnType<typeof fakeSocket> }> = [];
+  const all: Array<{ tags: Array<string>; ws: ReturnType<typeof fakeSocket> }> = [];
   const state = {
     acceptWebSocket: (ws: any, tags: Array<string> = []) => void all.push({ ws, tags }),
-    getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
+    getWebSockets: (tag?: string) => all.flatMap((s) => (!tag || s.tags.includes(tag) ? [s.ws] : [])),
   };
   const sockets = new SyncSockets(state, (g, a, l) => engine.pull(g, a, l));
   engine.listen((batch) => sockets.broadcast(batch));
@@ -22,9 +23,9 @@ function setup() {
 }
 
 function fakeSocket() {
-  let attachment: unknown = null;
+  let attachment: SocketIdentity | null = null;
   const sent: Array<any> = [];
-  return { sent, send: (m: string) => void sent.push(JSON.parse(m)), serializeAttachment: (v: unknown) => void (attachment = v), deserializeAttachment: () => attachment };
+  return { sent, send: (m: string) => void sent.push(JSON.parse(m)), serializeAttachment: (v: SocketIdentity) => void (attachment = v), deserializeAttachment: () => attachment };
 }
 
 describe('sync sockets', () => {
@@ -80,10 +81,10 @@ describe('watching groups', () => {
     });
     const engine = data.engine(memoryStorage());
     engine.init();
-    const all: Array<{ tags: string[]; ws: ReturnType<typeof fakeSocket> }> = [];
+    const all: Array<{ tags: Array<string>; ws: ReturnType<typeof fakeSocket> }> = [];
     const state = {
       acceptWebSocket: (ws: any, tags: Array<string> = []) => void all.push({ ws, tags }),
-      getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
+      getWebSockets: (tag?: string) => all.flatMap((s) => (!tag || s.tags.includes(tag) ? [s.ws] : [])),
     };
     const sockets = new SyncSockets(state, { pull: (_a, g, after, l) => engine.pull(g, after, l), view: (a, c) => engine.view(a, c), access: (a, g) => engine.access(a, g) });
     engine.listen((batch) => sockets.broadcast(batch));
@@ -149,10 +150,10 @@ describe('live topics over the socket', () => {
     });
     const engine = data.engine(memoryStorage());
     engine.init();
-    const all: Array<{ tags: string[]; ws: ReturnType<typeof fakeSocket> }> = [];
+    const all: Array<{ tags: Array<string>; ws: ReturnType<typeof fakeSocket> }> = [];
     const state = {
       acceptWebSocket: (ws: any, tags: Array<string> = []) => void all.push({ ws, tags }),
-      getWebSockets: (tag?: string) => all.filter((s) => !tag || s.tags.includes(tag)).map((s) => s.ws),
+      getWebSockets: (tag?: string) => all.flatMap((s) => (!tag || s.tags.includes(tag) ? [s.ws] : [])),
     };
     const sockets = new SyncSockets(state, {
       pull: (_a, g, after, l) => engine.pull(g, after, l),

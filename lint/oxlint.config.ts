@@ -5,7 +5,7 @@ const effect = 'react-you-might-not-need-an-effect';
 
 export default defineConfig({
   ...cloudflare,
-  ignorePatterns: ['**/node_modules/**', '**/dist/**', '**/.bwf/**', 'bwf/demo/db/migrations/**'],
+  ignorePatterns: ['**/node_modules/**', '**/dist/**', '**/.bwf/**', '**/bwf/demo/db/migrations/**'],
   jsPlugins: [...(cloudflare.jsPlugins ?? []), './comments.mjs', 'eslint-plugin-react-you-might-not-need-an-effect'],
   rules: {
     ...cloudflare.rules,
@@ -40,7 +40,12 @@ export default defineConfig({
     },
     {
       // Decision: Scripts, the command line tool and the demos print to the terminal on purpose.
-      files: ['**/scripts/**', 'typescript/packages/cli/**', 'bwf/**'],
+      files: ['**/scripts/**', '**/packages/cli/**', '**/bwf/**'],
+      rules: { 'no-console': 'off' },
+    },
+    {
+      // Decision: These three report an error to the console when the app gives no handler of its own. The packages have no logger.
+      files: ['**/packages/core/src/registry.ts', '**/packages/live/src/index.ts', '**/packages/data/src/deployment.ts'],
       rules: { 'no-console': 'off' },
     },
   ],

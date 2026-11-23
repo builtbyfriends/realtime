@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import { createMcpHandler } from 'agents/mcp/server';
 import type { CreateMcpHandlerOptions } from 'agents/mcp/server';
-import type { CallResult, JsonSchema, LoadedProcedure, Registry } from '@builtbyfriends/realtime';
+import type { CallResult, Exec, JsonSchema, LoadedProcedure, Registry } from '@builtbyfriends/realtime';
 
 type ExecutionContextLike = { waitUntil(promise: Promise<unknown>): void };
 
@@ -25,20 +25,31 @@ const passthrough = (json: JsonSchema) => ({
   },
 });
 
+type ErrorPayload = { code: string; message: string; issues?: Extract<CallResult, { ok: false }>['issues'] };
+type McpTool = Extract<LoadedProcedure['decisions']['mcp'], { kind: 'tool' }>;
+type ToolAnnotations = { readOnlyHint: boolean; destructiveHint: boolean; openWorldHint: boolean; idempotentHint?: boolean };
+type ToolConfig = {
+  title?: string;
+  description: string;
+  annotations: ToolAnnotations;
+  outputSchema?: ReturnType<typeof passthrough>;
+};
+
 function toToolResult(result: CallResult, structured: boolean): CallToolResult {
   if (result.ok) {
-    return {
-      content: [{ type: 'text', text: JSON.stringify(result.value) }],
-      ...(structured ? { structuredContent: result.value } : {}),
-    };
+    const ok: CallToolResult = { content: [{ type: 'text', text: JSON.stringify(result.value) }] };
+    if (structured) {ok.structuredContent = result.value;}
+    return ok;
   }
   const { code, message, issues } = result;
-  return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: { code, message, ...(issues ? { issues } : {}) } }) }] };
+  const error: ErrorPayload = { code, message };
+  if (issues) {error.issues = issues;}
+  return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error }) }] };
 }
 
 /** Builds an MCP server with one tool per procedure that chose `.mcp()`. */
 export function buildMcpServer(
-  registry: Registry<any>,
+  registry: Registry,
   info: { name: string; version: string },
   exec: { request: Request; env: unknown; ctx?: ExecutionContextLike },
 ): McpServer {
@@ -47,21 +58,13 @@ export function buildMcpServer(
     const mcp = p.decisions.mcp;
     if (mcp.kind !== 'tool') {continue;}
     const structured = p.jsonSchema.output?.type === 'object';
-    const run = (args: unknown) =>
-      registry
-        .call(p.name, args, {
-          request: exec.request,
-          env: exec.env,
-          surface: 'mcp',
-          ...(exec.ctx ? { waitUntil: (pr: Promise<unknown>) => exec.ctx!.waitUntil(pr) } : {}),
-        })
-        .then((r) => toToolResult(r, structured));
-    const config = {
-      ...(mcp.title ? { title: mcp.title } : {}),
-      description: mcp.description,
-      annotations: annotations(p),
-      ...(structured ? { outputSchema: passthrough(p.jsonSchema.output) } : {}),
-    };
+    const callExec: Exec = { request: exec.request, env: exec.env, surface: 'mcp' };
+    const { ctx } = exec;
+    if (ctx) {callExec.waitUntil = (pr: Promise<unknown>) => ctx.waitUntil(pr);}
+    const run = (args: unknown) => registry.call(p.name, args, callExec).then((r) => toToolResult(r, structured));
+    const config: ToolConfig = { description: mcp.description, annotations: annotations(mcp) };
+    if (mcp.title) {config.title = mcp.title;}
+    if (structured) {config.outputSchema = passthrough(p.jsonSchema.output);}
     if (p.decisions.input.kind === 'schema') {
       server.registerTool(p.toolName, { ...config, inputSchema: passthrough(p.jsonSchema.input ?? { type: 'object' }) }, (args) => run(args));
     } else {
@@ -71,27 +74,27 @@ export function buildMcpServer(
   return server;
 }
 
-function annotations(p: LoadedProcedure) {
-  const mcp = p.decisions.mcp as Extract<LoadedProcedure['decisions']['mcp'], { kind: 'tool' }>;
-  return {
+function annotations(mcp: McpTool): ToolAnnotations {
+  const hints: ToolAnnotations = {
     readOnlyHint: mcp.effect === 'read',
     destructiveHint: mcp.effect === 'destructive',
-    ...(mcp.idempotent !== undefined ? { idempotentHint: mcp.idempotent } : {}),
     openWorldHint: mcp.openWorld ?? false,
   };
+  if (mcp.idempotent !== undefined) {hints.idempotentHint = mcp.idempotent;}
+  return hints;
 }
 
 /**
  * Stateless MCP over Streamable HTTP, through Cloudflare's createMcpHandler. A fresh
  * server is built per request, so tools see that request's auth headers and env.
  */
-export function mcpHandler(registry: Registry<any>, options: McpHandlerOptions) {
+export function mcpHandler(registry: Registry, options: McpHandlerOptions) {
   const { name, version, route = '/mcp', ...rest } = options;
   const handler = (request: Request, env: unknown, ctx: ExecutionContextLike) =>
     createMcpHandler(() => buildMcpServer(registry, { name, version }, { request, env, ctx }), { ...rest, route })(
       request,
       env,
-      ctx as any,
+      ctx,
     );
   return Object.assign(handler, {
     matches: (request: Request) => new URL(request.url).pathname === route,

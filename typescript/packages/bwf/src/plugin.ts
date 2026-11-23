@@ -22,6 +22,16 @@ const PAGE_ID = 'virtual:realtime/devtools-page';
 const PAGE_RESOLVED = '\0' + PAGE_ID;
 const ALLOW_RE = /\/\/\s*realtime-allow:\s*(.+)/;
 
+function readPackageMeta(root: string) {
+  const pkg: unknown = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const meta = { name: 'app', version: '0.0.0' };
+  if (typeof pkg === 'object' && pkg !== null) {
+    if ('name' in pkg && typeof pkg.name === 'string') {meta.name = pkg.name;}
+    if ('version' in pkg && typeof pkg.version === 'string') {meta.version = pkg.version;}
+  }
+  return meta;
+}
+
 /**
  * realtime for bwf. Finds every procedure in `src/procedures/`, builds the registry, and
  * checks the two things bwf cannot: that the realtime middleware file exists (it serves
@@ -73,7 +83,7 @@ export function realtime(options: RealtimePluginOptions = {}): Plugin {
     load(id) {
       if (id === PAGE_RESOLVED) {return `export default ${JSON.stringify(dev ? readFileSync(new URL('./devtools.html', import.meta.url), 'utf8') : '')};`;}
       if (id !== RESOLVED) {return;}
-      const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+      const pkg = readPackageMeta(root);
       const files = procedureFiles();
       const logEvents = dev && options.logEventsInDev !== false;
       return [
@@ -86,7 +96,7 @@ export function realtime(options: RealtimePluginOptions = {}): Plugin {
         `const console_ = { name: 'console', track: (e) => console.log('[analytics]', JSON.stringify(e)) };`,
         `const ae = analyticsEngine({ binding: ${JSON.stringify(analytics)} });`,
         `export const registry = defineRegistry(found, { analytics: ${logEvents ? 'fanOut(ae, console_)' : 'ae'} });`,
-        `export const app = ${JSON.stringify({ name: pkg.name ?? 'app', version: pkg.version ?? '0.0.0', basePath: options.basePath ?? '/rpc', mcpRoute: options.mcpRoute ?? '/mcp' })};`,
+        `export const app = ${JSON.stringify({ name: pkg.name, version: pkg.version, basePath: options.basePath ?? '/rpc', mcpRoute: options.mcpRoute ?? '/mcp' })};`,
       ].join('\n');
     },
     configureServer(server: ViteDevServer) {
@@ -94,7 +104,7 @@ export function realtime(options: RealtimePluginOptions = {}): Plugin {
       server.printUrls = () => {
         printUrls();
         const url = server.resolvedUrls?.local[0];
-        if (url) {server.config.logger.info(`  \x1b[32m➜\x1b[0m  \x1b[1mrealtime\x1b[0m:    \x1b[36m${url.replace(/\/$/, '')}/__realtime\x1b[0m  (network, MCP and AI chat visualizers)`);}
+        if (url) {server.config.logger.info(`  \u001B[32m➜\u001B[0m  \u001B[1mrealtime\u001B[0m:    \u001B[36m${url.replace(/\/$/, '')}/__realtime\u001B[0m  (network, MCP and AI chat visualizers)`);}
       };
       // Decision: a new or deleted procedure file changes the registry module itself, so reload it.
       const reload = (file: string) => {

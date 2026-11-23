@@ -53,7 +53,7 @@ procedure('x').authz({ policy: 'p', check: () => true });
 procedure('x').noAuth(R).noInput().output(z.object({})).handler(() => ({}));
 
 // @ts-expect-error output is required: there is no noOutput()
-procedure('x').noOutput;
+void procedure('x').noOutput;
 
 // @ts-expect-error a decided concern's methods are gone: auth after noAuth
 procedure('x').noAuth(R).auth(token);

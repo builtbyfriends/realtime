@@ -3,6 +3,7 @@ import type { Registry } from '@builtbyfriends/realtime';
 
 declare global {
   // Decision: empty here. bwf fills it in from bwf.config.ts and your imports (.bwf/bindings.d.ts).
+  // oxlint-disable-next-line typescript/no-empty-object-type -- apps and the generated bindings add members by declaration merging
   interface BwfGeneratedEnvBindings {}
 }
 

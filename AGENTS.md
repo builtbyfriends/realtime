@@ -23,4 +23,6 @@ Code comments tend to repeat the code, go stale, or excuse a shortcut, so the `r
 
 ## Lint
 
-`bun run lint` in `typescript/` runs oxlint with the root `.oxlintrc.json`. Besides the comment rule it loads `oxlint-anti-slop` (type shortcuts such as `as unknown as T`, `object` parameters and `Record<string, any>`) and `eslint-plugin-react-you-might-not-need-an-effect`. Both install into `lint/` with bun, so the npm lockfile in `typescript/` stays as it is. A cast the code needs at a boundary gets an `oxlint-disable-next-line` with the rule's name.
+`bun run lint` in `typescript/` runs oxlint with `lint/oxlint.config.ts`. The config starts from Cloudflare's preset (`@cloudflare/oxlint-config`), which is type-aware and reports as errors. Its `quality/*` rules catch type shortcuts such as `as unknown as T`, `object` parameters and `Record<string, unknown>`. On top of that come the comment rule and `eslint-plugin-react-you-might-not-need-an-effect`. The demos in `bwf/` lint with `lint/oxlint.demos.config.ts`, the same rules without type information, because their dependencies aren't installed.
+
+The lint packages install into `lint/` with bun, so the npm lockfile in `typescript/` stays as it is. A rule that doesn't fit some files is turned off for them in the config with a `Decision:` line. A cast the code needs at a boundary gets an `oxlint-disable-next-line <rule> -- <reason>`.

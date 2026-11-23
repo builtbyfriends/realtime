@@ -1,4 +1,6 @@
-type Publisher = { withEnv(env: any): { publish(topic: string, data: unknown, options?: { type?: string; eventId?: string }): Promise<void> } };
+import type { BwfEnv } from './index.js';
+
+type Publisher = { withEnv(env: unknown): { publish(topic: string, data: unknown, options?: { type?: string; eventId?: string }): Promise<void> } };
 
 /**
  * `onCommit` for `defineData`: publishes a `changed` event on every topic a mutation touched.
@@ -23,7 +25,12 @@ export function publishTopics(live: Publisher, options: { only?: (topic: string)
   };
 }
 
-export type TopicContext = { topic: string; user: unknown; owner: string | null; env: any; request: Request };
+export type TopicContext = { topic: string; user: unknown; owner: string | null; env: BwfEnv; request: Request };
+const matches = (pattern: RegExp, topic: string) => {
+  const m = pattern.exec(topic);
+  return m && m[0] === topic ? m : null;
+};
+
 export type TopicRule = {
   /** Matched against the whole topic. Capture groups are passed to `allow`. */
   pattern: RegExp;
@@ -40,10 +47,6 @@ export type TopicRule = {
  *   ]) })
  */
 export function topicPolicy(rules: Array<TopicRule>) {
-  const matches = (pattern: RegExp, topic: string) => {
-    const m = pattern.exec(topic);
-    return m && m[0] === topic ? m : null;
-  };
   const policy = async (ctx: TopicContext): Promise<Response | void> => {
     for (const { pattern, allow } of rules) {
       const m = matches(pattern, ctx.topic);

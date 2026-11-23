@@ -35,7 +35,7 @@ async function start() {
   const out = join(tmp, '.cloudflare/output/v0/workers/default');
   const config = JSON.parse(readFileSync(join(out, 'worker.config.json'), 'utf8'));
   delete config.assets;
-  for (const [k, v] of Object.entries(config.env)) {if (v.type !== 'text' && v.type !== 'json') delete config.env[k];}
+  for (const [k, v] of Object.entries(config.env)) {if (v.type !== 'text' && v.type !== 'json') {delete config.env[k];}}
   delete config.manifest.type;
   config.manifest.modulesRoot = join(out, 'bundle');
   for (const k of Object.keys(config.manifest.modules)) {

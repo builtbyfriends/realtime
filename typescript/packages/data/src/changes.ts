@@ -1,6 +1,6 @@
-import { run } from './storage.js';
+import { parseDoc, run } from './storage.js';
 import type { DataStorage } from './storage.js';
-import type { Schema, TableDef } from './schema.js';
+import type { JsonObject, Schema, TableDef } from './schema.js';
 import type { DbReader } from './db.js';
 
 /**
@@ -15,7 +15,7 @@ export type Change = {
   id: string;
   group: string;
   /** The document's visible fields, or null for a delete or a move out of this group. */
-  doc: Record<string, unknown> | null;
+  doc: JsonObject | null;
 };
 
 export type ChangeBatch = { seq: number; changes: Array<Change> };
@@ -26,7 +26,7 @@ export type PullResult = ChangeBatch & {
 };
 
 /** Declares that a table syncs to devices: which group each document is in, and which fields a device may see. */
-export type SyncDef<D = any> = {
+export type SyncDef<D = JsonObject> = {
   /**
    * The group a document belongs to, or null to keep it off devices. A document several readers share, such as a chat
    * between people, can be in more than one group: one per reader.
@@ -39,11 +39,11 @@ export type SyncDef<D = any> = {
    * (names, a reply's original). It runs once per reader for each change they get, so keep its reads few. Return null to
    * leave the change out for that reader. Leave it out to send the visible fields to everyone.
    */
-  view?: (doc: D, reader: SyncReader) => unknown;
+  view?: (doc: D, reader: SyncReader) => JsonObject | null | undefined;
 };
 
 /** What a `view` gets: read access and who's reading. `actor` is what the door said the caller is. */
-export type SyncReader = { db: DbReader<any>; actor: string; now: number };
+export type SyncReader = { db: DbReader<Schema>; actor: string; now: number };
 
 export function syncChanges(storage: DataStorage): void {
   run(storage, `CREATE TABLE IF NOT EXISTS _changes (tbl TEXT NOT NULL, id TEXT NOT NULL, grp TEXT NOT NULL, seq INTEGER NOT NULL, deleted INTEGER NOT NULL, PRIMARY KEY (tbl, id, grp)) WITHOUT ROWID`);
@@ -62,18 +62,21 @@ export function currentSeq(storage: DataStorage): number {
 }
 
 /** The fields of a document a device may see. */
-export function visible(def: TableDef, doc: Record<string, unknown>): Record<string, unknown> {
+export function visible(def: TableDef, doc: JsonObject): JsonObject {
   const fields = def.sync?.fields;
   if (!fields) {return doc;}
-  const out: Record<string, unknown> = { _id: doc._id, _creationTime: doc._creationTime };
-  for (const f of fields) {if (f in doc) out[f] = doc[f];}
+  const out: JsonObject = { _id: doc._id, _creationTime: doc._creationTime };
+  for (const f of fields) {
+    if (f in doc) {out[f] = doc[f];}
+  }
   return out;
 }
 
-type Pending = { table: string; id: string; before: Array<string>; after: Record<string, unknown> | null };
+type Pending = { table: string; id: string; before: Array<string>; after: JsonObject | null };
 
-function groupsOf(def: TableDef, doc: Record<string, unknown> | null): Array<string> {
-  const g = doc ? def.sync!.group(doc) : null;
+function groupsOf(def: TableDef, doc: JsonObject | null): Array<string> {
+  const sync = def.sync;
+  const g = doc && sync ? sync.group(doc) : null;
   return g === null ? [] : typeof g === 'string' ? [g] : [...new Set(g)];
 }
 
@@ -84,7 +87,7 @@ export class ChangeRecorder {
   constructor(private readonly schema: Schema) {}
 
   /** `before` and `after` are the stored document (with `_id` and `_creationTime`) or null. */
-  record(table: string, id: string, before: Record<string, unknown> | null, after: Record<string, unknown> | null): void {
+  record(table: string, id: string, before: JsonObject | null, after: JsonObject | null): void {
     const def = this.schema[table];
     if (!def?.sync) {return;}
     const key = `${table}\u0000${id}`;
@@ -103,16 +106,19 @@ export class ChangeRecorder {
     if (!this.pending.size) {return null;}
     const seq = currentSeq(storage) + 1;
     const changes: Array<Change> = [];
-    const put = (table: string, id: string, group: string, doc: Record<string, unknown> | null) => {
+    const put = (table: string, id: string, group: string, doc: JsonObject | null) => {
       run(storage, `INSERT OR REPLACE INTO _changes (tbl,id,grp,seq,deleted) VALUES (?,?,?,?,?)`, table, id, group, seq, doc ? 0 : 1);
       changes.push({ table, id, group, doc });
     };
     for (const p of this.pending.values()) {
-      const def = this.schema[p.table]!;
+      const def = this.schema[p.table];
+      if (!def) {continue;}
       const groups = groupsOf(def, p.after);
-      for (const g of p.before) {if (!groups.includes(g)) put(p.table, p.id, g, null);}
-      if (groups.length) {
-        const doc = visible(def, p.after!);
+      for (const g of p.before) {
+        if (!groups.includes(g)) {put(p.table, p.id, g, null);}
+      }
+      if (p.after && groups.length) {
+        const doc = visible(def, p.after);
         for (const g of groups) {put(p.table, p.id, g, doc);}
       }
     }
@@ -141,8 +147,10 @@ export function pull(storage: DataStorage, schema: Schema, groups: ReadonlyArray
   let more = rows.length > limit;
   let page = more ? rows.slice(0, limit) : rows;
   // Decision: a page ends on a whole commit, so a device never stops halfway through one.
-  if (more && rows[limit]!.seq === page.at(-1)!.seq) {
-    const last = page.at(-1)!.seq;
+  const next = rows[limit];
+  const end = page.at(-1);
+  if (more && next && end && next.seq === end.seq) {
+    const last = end.seq;
     const whole = page.filter((r) => r.seq < last);
     page = whole.length
       ? whole
@@ -151,10 +159,11 @@ export function pull(storage: DataStorage, schema: Schema, groups: ReadonlyArray
   const changes: Array<Change> = page.map((r) => {
     const def = schema[r.tbl];
     const row = r.deleted || !def ? undefined : run<{ _id: string; _creationTime: number; doc: string }>(storage, `SELECT _id,_creationTime,doc FROM t_${r.tbl} WHERE _id=?`, r.id)[0];
-    const doc = row ? visible(def!, { ...JSON.parse(row.doc), _id: row._id, _creationTime: row._creationTime }) : null;
+    const doc = def && row ? visible(def, { ...parseDoc(row.doc), _id: row._id, _creationTime: row._creationTime }) : null;
     return { table: r.tbl, id: r.id, group: r.grp, doc };
   });
-  const seq = more ? page.at(-1)!.seq : now;
+  const tail = page.at(-1);
+  const seq = more && tail ? tail.seq : now;
   more = more && seq < now;
   return { seq, changes, more };
 }

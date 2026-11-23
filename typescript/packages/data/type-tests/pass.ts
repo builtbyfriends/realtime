@@ -17,7 +17,7 @@ const data = defineData({
   }),
 });
 
-declare const ns: { idFromName(n: string): unknown; get(id: unknown): any };
+declare const ns: { idFromName(n: string): string; get(id: string): any };
 const client = data.client(ns);
 
 expectTypeOf(client.mutate.send).parameter(0).toEqualTypeOf<{ channel: string; body: string }>();
@@ -27,6 +27,6 @@ expectTypeOf(client.query.total).parameters.toEqualTypeOf<[]>();
 expectTypeOf(client.query.total).returns.resolves.toBeNumber();
 
 // @ts-expect-error a mutation is not on the query side
-client.query.send;
+void client.query.send;
 // @ts-expect-error wrong argument
 void client.mutate.send({ channel: 'a' });

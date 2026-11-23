@@ -13,7 +13,7 @@ const schema = defineSchema({
   }),
 });
 
-function setup(options: { onCommit?: (topics: Array<string>) => void; seed?: boolean } = {}) {
+function setup(options: { onCommit?: (topics: Array<string>) => void | Promise<void>; seed?: boolean } = {}) {
   const calls: Array<string> = [];
   const data = defineData({
     schema,

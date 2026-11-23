@@ -14,7 +14,8 @@ export type FetchEventSourceOptions = {
   fetch?: typeof fetch;
 };
 
-type Listener = (event: any) => void;
+type StreamEvent = { type: string; data?: string; error?: unknown };
+type Listener = (event: StreamEvent) => void;
 
 export type FetchEventSourceConstructor = new (
   url: string,
@@ -37,7 +38,12 @@ export function fetchEventSource(options: FetchEventSourceOptions): FetchEventSo
     }
 
     addEventListener(type: string, listener: Listener) {
-      (this.#listeners.get(type) ?? this.#listeners.set(type, new Set()).get(type)!).add(listener);
+      let listeners = this.#listeners.get(type);
+      if (!listeners) {
+        listeners = new Set();
+        this.#listeners.set(type, listeners);
+      }
+      listeners.add(listener);
     }
 
     removeEventListener(type: string, listener: Listener) {
@@ -49,8 +55,9 @@ export function fetchEventSource(options: FetchEventSourceOptions): FetchEventSo
       this.#abort.abort();
     }
 
-    #emit(type: string, event: Record<string, unknown> = {}) {
+    #emit(type: string, event: { data?: string; error?: unknown } = {}) {
       if (this.#closed) {return;}
+      // oxlint-disable-next-line unicorn/no-useless-spread -- a listener may remove itself while the loop runs, so it walks a copy
       for (const listener of [...(this.#listeners.get(type) ?? [])]) {listener({ type, ...event });}
     }
 

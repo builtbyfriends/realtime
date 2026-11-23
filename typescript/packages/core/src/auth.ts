@@ -9,15 +9,18 @@ export function bearerAuth<Ctx, Env = unknown>(opts: {
   verify: (token: string, env: Env) => Promise<Ctx | null | undefined> | Ctx | null | undefined;
   actorId?: (ctx: Ctx) => string | undefined;
 }): AuthProvider<Ctx, Env> {
-  return {
+  const provider: AuthProvider<Ctx, Env> = {
     name: opts.name ?? 'bearer',
     resolve(request, env) {
       const header = request.headers.get('authorization') ?? '';
-      const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-      return match ? opts.verify(match[1]!.trim(), env) : null;
+      const token = /^Bearer\s+(.+)$/i.exec(header.trim())?.[1];
+      return token === undefined ? null : opts.verify(token.trim(), env);
     },
-    ...(opts.actorId ? { actorId: opts.actorId } : {}),
   };
+  if (opts.actorId) {
+    provider.actorId = opts.actorId;
+  }
+  return provider;
 }
 
 /** Tries each provider in order and uses the first that resolves a caller. */
@@ -27,7 +30,7 @@ export function anyOf<Ctx, Env = unknown>(name: string, ...providers: Array<Auth
     async resolve(request, env) {
       for (const p of providers) {
         const ctx = await p.resolve(request, env);
-        if (ctx != null) {return ctx;}
+        if (ctx !== null && ctx !== undefined) {return ctx;}
       }
       return null;
     },

@@ -1,17 +1,37 @@
+import type { JsonObject, JsonValue } from './schema.js';
+
+export type SqlValue = string | number | ArrayBuffer | null;
+export type SqlRow = { [column: string]: SqlValue };
+
 /**
  * The slice of a Durable Object's storage this package uses. `ctx.storage` satisfies it
  * as is, and tests satisfy it with node:sqlite.
  */
 export interface DataStorage {
-  sql: { exec(query: string, ...bindings: Array<unknown>): Iterable<any> & { toArray(): Array<any> } };
+  sql: { exec<T extends SqlRow = SqlRow>(query: string, ...bindings: Array<unknown>): Iterable<T> & { toArray(): Array<T> } };
   transactionSync<T>(fn: () => T): T;
   setAlarm(time: number): void | Promise<void>;
   deleteAlarm(): void | Promise<void>;
 }
 
+export function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function isJsonArray(value: JsonValue): value is ReadonlyArray<JsonValue> {
+  return Array.isArray(value);
+}
+
+/** Reads a stored document. */
+export function parseDoc(text: string): JsonObject {
+  const value: unknown = JSON.parse(text);
+  if (!isJsonObject(value)) {throw new Error('a stored document must be an object');}
+  return value;
+}
+
 /** Runs one statement to completion and returns its rows. */
-export function run<T = any>(storage: DataStorage, query: string, ...bindings: Array<unknown>): Array<T> {
-  return storage.sql.exec(query, ...bindings).toArray() as Array<T>;
+export function run<T extends SqlRow = SqlRow>(storage: DataStorage, query: string, ...bindings: Array<unknown>): Array<T> {
+  return storage.sql.exec<T>(query, ...bindings).toArray();
 }
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -40,6 +60,6 @@ export function bindable(value: unknown): string | number | null | ArrayBuffer {
 
 export function hash(text: string): string {
   let h = 0x81_1c_9d_c5;
-  for (let i = 0; i < text.length; i++) {h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);}
+  for (let i = 0; i < text.length; i++) {h = Math.imul(h ^ text.charCodeAt(i), 0x01_00_01_93);}
   return (h >>> 0).toString(36);
 }

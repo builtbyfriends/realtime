@@ -25,13 +25,12 @@ export function createLiveHooks<R extends Typed>(live: Live<R>) {
     input: InputOf<Procs<R>[N]>,
     options: QueryOptions = {},
   ): UseQueryResult<OutputOf<Procs<R>[N]>> {
-    const topicsKey = stableKey(options.topics ?? null);
-    const handle = useMemo(
-      () => live.query(name, input, options),
-      // Decision: the input and topics are compared by value with sorted keys, so an inline object, or
-      // the same object with its keys in another order, doesn't resubscribe.
-      [name, stableKey(input), topicsKey, options.enabled],
-    );
+    // Decision: the input and topics are compared by value with sorted keys, so an inline object, or
+    // the same object with its keys in another order, doesn't resubscribe.
+    const key = `${stableKey(input)}:${stableKey(options.topics ?? null)}:${String(options.enabled)}`;
+    const [kept, setKept] = useState({ key, input, options });
+    if (kept.key !== key) {setKept({ key, input, options });}
+    const handle = useMemo(() => live.query(name, kept.input, kept.options), [name, kept]);
     const state = useSyncExternalStore(handle.subscribe, handle.getSnapshot, handle.getSnapshot);
     return { ...state, loading: state.status === 'loading', refetch: handle.refetch };
   }
