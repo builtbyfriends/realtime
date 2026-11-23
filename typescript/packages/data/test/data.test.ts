@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DbReader } from '../src/db.js';
 import { defineData, defineSchema, table } from '../src/index.js';
 import { memoryStorage } from './storage.js';
 
@@ -536,3 +537,12 @@ describe('round 4 guards', () => {
   });
 });
 
+
+describe('reads of a removed table', () => {
+  it('refuses get on a table that is not in the schema', () => {
+    const storage = memoryStorage();
+    defineData({ schema, functions: () => ({}) }).engine(storage).init();
+    const reader = new DbReader(storage, defineSchema({}));
+    expect(() => reader.get('messages' as never, 'x')).toThrow(/no table "messages"/);
+  });
+});

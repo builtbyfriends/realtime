@@ -13,6 +13,7 @@ import { pullLimit, type Change, type ChangeBatch, type PullResult } from './cha
  *   object → device  {"type":"pull","id":1,"seq":40,"changes":[...],"more":false}
  *   device → object  {"type":"watch","groups":["channel:x"],"after":38,"id":2}   `after` is optional
  *   object → device  {"type":"watching","id":2,"groups":["channel:x"],"denied":[],"seq":40,"changes":[...],"more":false}
+ *   object → device  {"type":"error","id":1,"error":"bad after"}   a `pull` or `watch` whose `after` isn't a number of 0 or more
  *   device → object  {"type":"unwatch","groups":["channel:x"]}
  *   object → device  {"type":"changes","seq":41,"changes":[...]}   after each commit that touches its groups
  *   object → device  {"type":"groups","added":["team:x"],"removed":["team:y"]}   drop what's in removed
@@ -138,7 +139,12 @@ export class SyncSockets {
   private handle(ws: Socket, msg: Incoming): void {
     const who = identity(ws);
     if (!who) return;
-    const after = typeof msg.after === 'number' && Number.isFinite(msg.after) && msg.after >= 0 ? msg.after : 0;
+    const badAfter = msg.after !== undefined && !(typeof msg.after === 'number' && Number.isFinite(msg.after) && msg.after >= 0);
+    if ((msg.type === 'pull' || msg.type === 'watch') && badAfter) {
+      trySend(ws, { type: 'error', id: msg.id, error: 'bad after' });
+      return;
+    }
+    const after = typeof msg.after === 'number' ? msg.after : 0;
     const limit = typeof msg.limit === 'number' ? msg.limit : undefined;
     if (msg.type === 'pull') {
       trySend(ws, { type: 'pull', id: msg.id, epoch: this.epoch(), ...this.pulled(who.actor, who.groups, after, limit) });

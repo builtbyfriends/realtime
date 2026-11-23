@@ -229,10 +229,12 @@ export function defineData<S extends Schema, F extends Record<string, AnyFn>, J 
   };
 }
 
-function socketIdentity(header: string): SocketIdentity | null {
+/** @internal */
+export function socketIdentity(header: string): SocketIdentity | null {
   try {
     const v = JSON.parse(header) as { actor?: unknown; groups?: unknown } | null;
     if (!v || typeof v.actor !== 'string' || !Array.isArray(v.groups) || !v.groups.every((g) => typeof g === 'string')) return null;
+    if (v.actor.length === 0 || v.actor.length > 200) return null;
     return { actor: v.actor, groups: v.groups };
   } catch {
     return null;

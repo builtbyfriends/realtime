@@ -179,4 +179,27 @@ describe('cli', () => {
     }
     expect(JSON.parse((await cli('contacts', 'search', '--json', '{"query":"q"}')).out).input).toEqual({ query: 'q' });
   });
+
+  it('sends true for --no-x=false and false for --no-x=true', async () => {
+    const send = async (...a: string[]) => JSON.parse((await cli('contacts', 'search', '--query', 'x', ...a)).out).input.exact;
+    expect(await send('--no-exact=false')).toBe(true);
+    expect(await send('--no-exact=true')).toBe(false);
+    const r = await cli('contacts', 'search', '--query', 'x', '--no-exact=maybe');
+    expect(r.code).toBe(2);
+  });
+
+  it('reports a manifest in the wrong shape', async () => {
+    const bad = [{ procedures: 'x' }, { procedures: [{ path: '/a', cli: null, errors: {} }] }, { procedures: [{ path: '/a', cli: { command: 'a', description: 'a' }, errors: {}, input: { properties: { k: { enum: 'x' } } } }] }];
+    for (const m of bad) {
+      let err = '';
+      const code = await run({ argv: ['a'], env: { REALTIME_URL: 'https://api.test' }, fetch: async () => new Response(JSON.stringify(m)), stdout: () => {}, stderr: (s) => (err += s) });
+      expect({ code, err }).toEqual({ code: 1, err: "realtime: the server's manifest isn't in the expected shape\n" });
+    }
+  });
+
+  it('says in help that a property named like a CLI flag needs --json', async () => {
+    const r = await cli('links', 'add', '--help');
+    expect(r.out).toContain("url can't be set with a flag");
+    expect(r.out).toContain(`--json '{"url": ...}'`);
+  });
 });

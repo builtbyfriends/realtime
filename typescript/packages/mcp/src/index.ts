@@ -63,7 +63,7 @@ export function buildMcpServer(
     if (p.decisions.input.kind === 'schema') {
       server.registerTool(p.toolName, { ...config, inputSchema: passthrough(p.jsonSchema.input ?? { type: 'object' }) }, (args) => run(args));
     } else {
-      server.registerTool(p.toolName, config, () => run(undefined));
+      server.registerTool(p.toolName, { ...config, inputSchema: passthrough({ type: 'object' }) }, (args) => run(args));
     }
   }
   return server;

@@ -27,6 +27,7 @@ function typeOf(p: Prop): string {
 }
 
 class UsageError extends Error {}
+class ShapeError extends Error {}
 
 const ownFlags = ['url', 'token', 'help'];
 
@@ -118,7 +119,8 @@ function inputFromFlags(entry: ManifestEntry, flags: [string, string | true][]):
     const prop = props[key]!;
     if (negated) {
       if (typeOf(prop) !== 'boolean') throw new UsageError(`--${flag} only works for true/false flags`);
-      input[key] = false;
+      if (raw !== true && raw !== 'true' && raw !== 'false') throw new UsageError(`--${flag} takes true or false`);
+      input[key] = raw === 'false';
       continue;
     }
     const value = coerce(flag, prop, raw);
@@ -142,9 +144,27 @@ function commandHelp(entry: ManifestEntry): string {
     lines.push(`  --${kebab(k)} <${t}>${req}${p.description ? `  ${p.description}` : ''}`);
   }
   lines.push('  --json <object>  pass the whole input as JSON');
+  const shadowed = props.map(([k]) => k).filter((k) => [...ownFlags, 'json'].includes(kebab(k)));
+  if (shadowed.length) lines.push('', `${shadowed.join(', ')} can't be set with a flag because the CLI uses that flag itself. Pass it through --json '{"${shadowed[0]}": ...}'.`);
   const errs = Object.entries(entry.errors);
   if (errs.length) lines.push('', 'Errors:', ...errs.map(([c, s]) => `  ${c} (${s.status}) ${s.message}`));
   return lines.join('\n') + '\n';
+}
+
+function isManifest(m: unknown): m is Manifest {
+  const list = (m as { procedures?: unknown } | null)?.procedures;
+  if (!Array.isArray(list)) return false;
+  return list.every((p) => {
+    if (typeof p !== 'object' || p === null || typeof p.path !== 'string') return false;
+    if (!(typeof p.cli === 'object' && p.cli !== null && typeof p.cli.command === 'string' && typeof p.cli.description === 'string')) return false;
+    if (p.errors !== undefined && (typeof p.errors !== 'object' || p.errors === null)) return false;
+    const props = p.input?.properties;
+    if (props !== undefined && (typeof props !== 'object' || props === null)) return false;
+    return Object.values(props ?? {}).every((x) => {
+      const q = x as { enum?: unknown; items?: unknown; anyOf?: unknown };
+      return typeof x === 'object' && x !== null && (q.enum === undefined || Array.isArray(q.enum)) && (q.anyOf === undefined || Array.isArray(q.anyOf));
+    });
+  });
 }
 
 function listHelp(manifest: Manifest): string {
@@ -192,8 +212,14 @@ export async function run(io: Io): Promise<number> {
   try {
     const res = await f(`${origin}${basePath}/manifest.json`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    manifest = (await res.json()) as Manifest;
+    const parsed: unknown = await res.json();
+    if (!isManifest(parsed)) throw new ShapeError();
+    manifest = parsed;
   } catch (e) {
+    if (e instanceof ShapeError) {
+      io.stderr(`realtime: the server's manifest isn't in the expected shape\n`);
+      return 1;
+    }
     io.stderr(`realtime: could not load ${origin}${basePath}/manifest.json: ${(e as Error).message}\n`);
     return 1;
   }

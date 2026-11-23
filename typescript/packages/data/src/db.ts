@@ -35,6 +35,7 @@ export class DbReader<S extends Schema> {
 
   get<T extends keyof S & string>(table: T, id: string): Doc<S[T]> | null {
     ident(table, 'table');
+    this.def(table);
     const row = run<Row>(this.storage, `SELECT * FROM t_${table} WHERE _id=?`, id)[0];
     return row ? toDoc(row) : null;
   }

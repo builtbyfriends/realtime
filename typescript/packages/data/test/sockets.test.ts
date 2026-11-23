@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { defineData, defineSchema, SyncSockets, table } from '../src/index.js';
+import { socketIdentity } from '../src/deployment.js';
 import { memoryStorage } from './storage.js';
 
 const schema = defineSchema({
@@ -508,5 +509,25 @@ describe('sockets that go wrong', () => {
     engine.listen((batch) => void seen.push(batch.seq));
     await expect(engine.run('mutation', 'add', { room: 'x', text: 'hi' })).rejects.toThrow('no alarm');
     expect(seen).toEqual([1]);
+  });
+});
+
+describe('sync input checks', () => {
+  it('answers a bad after on pull and watch with an error and does nothing else', () => {
+    const { sockets } = setup();
+    const a = fakeSocket();
+    sockets.accept(a, { actor: 'ann', groups: ['room:x'] });
+    for (const after of [-1, 'x', Number.NaN, null]) {
+      sockets.message(a, JSON.stringify({ type: 'pull', after, id: 1 }));
+      sockets.message(a, JSON.stringify({ type: 'watch', groups: ['room:y'], after, id: 2 }));
+    }
+    expect(a.sent.every((m) => m.type === 'error' && m.error === 'bad after')).toBe(true);
+    expect(a.sent).toHaveLength(8);
+  });
+
+  it('refuses an empty actor or one too long for a socket tag', () => {
+    expect(socketIdentity(JSON.stringify({ actor: 'ann', groups: [] }))).toEqual({ actor: 'ann', groups: [] });
+    expect(socketIdentity(JSON.stringify({ actor: '', groups: [] }))).toBeNull();
+    expect(socketIdentity(JSON.stringify({ actor: 'a'.repeat(201), groups: [] }))).toBeNull();
   });
 });
