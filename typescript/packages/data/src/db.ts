@@ -380,7 +380,7 @@ function distinctNames(schema: Schema): void {
   }
 }
 
-/** Drops the search and vector tables the schema no longer has, so one that comes back later is built again from the documents. */
+// Decision: a search or vector table the schema no longer has is dropped, so one that comes back later is built again from the documents.
 function dropRemoved(storage: DataStorage, schema: Schema): void {
   for (const { key } of run<{ key: string }>(storage, `SELECT key FROM _meta WHERE key LIKE '%/fts:%' OR key LIKE '%/vec:%'`)) {
     const [table, rest] = key.split('/') as [string, string];

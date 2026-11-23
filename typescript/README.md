@@ -154,16 +154,16 @@ handler duration in ms.
 ## Development
 
 ```
-npm install
-npm run check        # build, type tests, compiler message snapshot, 45 vitest tests
-npm run e2e          # example Worker in wrangler dev: HTTP, CLI, MCP client, deploy gate
-cd examples/contacts-worker && npm run dev
+bun install
+bun run check        # build, type tests, compiler message snapshot, 45 vitest tests
+bun run e2e          # example Worker in wrangler dev: HTTP, CLI, MCP client, deploy gate
+cd examples/contacts-worker && bun run dev
 ```
 
 - `packages/core/type-tests/pass.ts`: positive types plus `@ts-expect-error` for each
   mistake the types must reject.
 - `packages/core/type-tests/messages/messages.expected.txt`: the exact compiler messages
-  an agent sees, snapshotted (`npm run test:types -- --update` to accept a change).
+  an agent sees, snapshotted (`bun run test:types --update` to accept a change).
 - `packages/core/type-tests/perf.ts`: 200 full procedures type-check in about 0.5 s.
 
 Built and tested with TypeScript 7.0, Zod 4.6, Valibot 1.5, agents 0.33, MCP SDK 2.4,
@@ -247,4 +247,4 @@ send.mutate({ channel, body }, {
   optimistic: (store) => store.update('messages.list', { channel }, (list) => [...list, body]),
 });
 ```
-`examples/chat-worker` runs the data layer in workerd (`npm run e2e`).
+`examples/chat-worker` runs the data layer in workerd (`bun run e2e`).

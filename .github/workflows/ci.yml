@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths: ["typescript/**", "bwf/**", "lint/**", ".oxlintrc.json", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["typescript/**", "bwf/**", "lint/**", ".oxlintrc.json", ".github/workflows/ci.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: typescript
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run build
+      - run: bun run lint
+      - name: Check each package packs with what it loads at run time
+        run: |
+          for dir in packages/*/; do
+            (cd "$dir" && bun pm pack --dry-run > /dev/null)
+          done
+          (cd packages/bwf && bun pm pack --dry-run | grep -q 'dist/devtools.html')
