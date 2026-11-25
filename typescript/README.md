@@ -227,7 +227,8 @@ export const registry = defineRegistry([...module.procedures, ...otherProcedures
 `defineContract` and `implementContract` throw one error that lists each problem and what to change, and the types catch most of
 them first: a move or event the contract doesn't list, a failure a command doesn't list, a topic field that isn't in the payload, an
 example that doesn't match the input. Events are checked against their schema and published after the handler succeeds, so a failed
-or repeated call publishes nothing.
+or repeated call publishes nothing. An event's `topic` can be a list, such as `['tasks:{id}', 'tasks-by:{createdBy}']`, and the
+event then goes out once on each topic, so a screen can follow one record or a whole group of them.
 
 A write's `requestId` and first result live in a `RunOnceStore`. `storageRunOnce(ctx.storage)` keeps them in a Durable Object's own
 SQLite, next to the state they guard, so a retry after a restart still gets the first result. `memoryRunOnce()` keeps them in memory,

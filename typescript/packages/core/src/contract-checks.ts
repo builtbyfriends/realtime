@@ -1,5 +1,5 @@
 import type { CommandSpec, CommandName, Contract, ContractSpec, GoodInput, MoveOf, StateOf } from './contract.js';
-import { isReason } from './contract.js';
+import { fillTopic, isReason, topicsOf } from './contract.js';
 import type { ContractEvent, ContractModule } from './contract-module.js';
 import type { State } from './builder.js';
 import { fieldsOf, isRecord, typeOf, wordsAt } from './json-schema.js';
@@ -99,6 +99,22 @@ class Run {
     return request;
   }
 
+  topicCount(event: string): number {
+    const spec = this.contract.events[event];
+
+    return spec ? topicsOf(spec).length : 1;
+  }
+
+  expectTopics(label: string, event: string, sent: ReadonlyArray<ContractEvent>): void {
+    const spec = this.contract.events[event];
+
+    for (const topic of spec ? topicsOf(spec) : []) {
+      if (!sent.some((x) => x.topic === fillTopic(topic, x.payload))) {
+        throw new Error(`${label}: emitted "${event}" without publishing it on ${topic}, which events.${event}.topic lists`);
+      }
+    }
+  }
+
   async observe(calls: () => Promise<Array<CallResult>>): Promise<{ results: Array<CallResult>; events: Array<ContractEvent> }> {
     const events: Array<ContractEvent> = [];
     const stop = this.module.events.subscribe((e) => void events.push(e));
@@ -177,7 +193,11 @@ function goodChecks(run: Run, name: string, cmd: CommandSpec): Array<ContractChe
         expectOk(label, result);
 
         for (const e of cmd.emits ?? []) {
-          if (!events.some((x) => x.name === e)) {throw new Error(`${label}: succeeded without emitting "${e}", which it lists in emits. Emit it, or take it out of emits.`);}
+          const sent = events.filter((x) => x.name === e);
+
+          if (!sent.length) {throw new Error(`${label}: succeeded without emitting "${e}", which it lists in emits. Emit it, or take it out of emits.`);}
+
+          run.expectTopics(label, e, sent);
         }
       },
     },
@@ -296,7 +316,7 @@ function retryChecks(run: Run, name: string, cmd: CommandSpec): Array<ContractCh
       throw new Error(`${label}: the repeat got ${shown(second)}, not the first result ${shown(first)}. Pass runOnce to implementContract.`);
     }
 
-    const expected = cmd.emits?.length ?? 0;
+    const expected = (cmd.emits ?? []).reduce((n, e) => n + run.topicCount(e), 0);
 
     if (events.length > expected) {throw new Error(`${label}: published ${events.length} event(s) for one requestId, expected at most ${expected}`);}
   };

@@ -100,7 +100,7 @@ tasks.remove (destructive)
 
 ## Events
 
-tasks.created on tasks:{id}
+tasks.created on tasks:{id} and tasks-by:{createdBy}
   A task was added.
   Payload: Task
 

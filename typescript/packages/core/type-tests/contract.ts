@@ -109,5 +109,8 @@ defineContract({
   events: {
     // @ts-expect-error: a topic field that isn't in the payload
     archived: { description: 'A note was archived.', topic: 'notes:{noteId}', payload: Note },
+    // @ts-expect-error: a topic in a list with a field that isn't in the payload
+    sent: { description: 'A note was sent.', topic: ['notes:{id}', 'notes-by:{author}'], payload: Note },
+    read: { description: 'A note was read.', topic: ['notes:{id}', 'notes:{state}'], payload: Note },
   },
 });

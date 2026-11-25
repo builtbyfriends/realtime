@@ -21,7 +21,7 @@ A task is open, doing or done. `start` moves it from open to doing, `finish` fro
 
 - A handler changes state only through `move(current)`, so the contract's list is the one place moves are allowed.
 - A write takes a `requestId`. A repeat with the same id gets the first result and publishes nothing.
-- Events go out after the handler returns, and only when it succeeds.
+- Events go out after the handler returns, and only when it succeeds. `created` goes out on two topics: the task's own and its creator's.
 - The tasks live in memory, so they go when the Worker restarts. A real module keeps them with its own Durable Object.
 
 ## Check it

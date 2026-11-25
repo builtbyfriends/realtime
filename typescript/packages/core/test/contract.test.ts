@@ -38,12 +38,12 @@ const notes = defineContract({
       move: 'send',
     },
   },
-  events: { written: { description: 'A note was written.', topic: 'notes:{id}', payload: Note } },
+  events: { written: { description: 'A note was written.', topic: ['notes:{id}', 'notes:{state}'], payload: Note } },
 });
 
 type Note = z.infer<typeof Note>;
 
-type Mistakes = { skipMove?: boolean; skipEmit?: boolean; ignoreCapability?: boolean; badEvent?: boolean };
+type Mistakes = { skipMove?: boolean; skipEmit?: boolean; ignoreCapability?: boolean; badEvent?: boolean; dropTopic?: boolean };
 
 type Caller = { id: string; caps: ReadonlyArray<string> };
 
@@ -92,7 +92,10 @@ function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce())
 
   const registry = defineRegistry(module.procedures);
 
-  const checks = contractChecks(module).with({
+  const seenBy = (listener: (e: ContractEvent) => void) => (e: ContractEvent) => (mistakes.dropTopic && e.topic === 'notes:draft' ? undefined : listener(e));
+  const observed = { ...module, events: { subscribe: (listener: (e: ContractEvent) => void) => module.events.subscribe(seenBy(listener)) } };
+
+  const checks = contractChecks(observed).with({
     registry,
     callerWith: (caps) => {
       const id = `c-${callers.size + 1}`;
@@ -176,6 +179,14 @@ describe('defineContract', () => {
       }),
     ).toThrow('Note.state has to be an enum of exactly states.list (draft, sent), such as z.enum(states)');
   });
+
+  it('checks each topic in a list against the payload', () => {
+    const events = (topic: ReadonlyArray<string>) => ({ name: 'notes', description: 'Notes.', data: { Note }, commands: {}, events: { written: { description: 'A note was written.', topic, payload: Note } } });
+    // Decision: the types refuse a topic field the payload doesn't have, so the cast stands in for plain JavaScript that skipped them.
+    expect(() => defineContract(events(['notes:{id}', 'notes-by:{author}']) as any)).toThrow('events.written.topic[1] uses {author}, which is not a payload field (id, body, state)');
+    expect(() => defineContract(events([]))).toThrow('events.written.topic is an empty list: name at least one topic');
+    expect(() => defineContract(events(['notes:{id}', 'notes:{id}']))).toThrow('events.written.topic lists a topic twice');
+  });
 });
 
 describe('implementContract', () => {
@@ -207,7 +218,7 @@ describe('implementContract', () => {
     expect(registry.procedures.size).toBe(2);
   });
 
-  it('fills the topic from the payload', async () => {
+  it('publishes the event once on each topic, filled from the payload', async () => {
     const { module, callers } = build();
     const registry = defineRegistry(module.procedures);
     const seen: Array<ContractEvent> = [];
@@ -216,7 +227,11 @@ describe('implementContract', () => {
     const waits: Array<Promise<unknown>> = [];
     await registry.call('notes.write', { body: 'Hi', requestId: 'r1' }, { request: new Request('https://x', { headers: { 'x-caller': 'c' } }), env: {}, surface: 'direct', waitUntil: (p) => void waits.push(p) });
     await Promise.all(waits);
-    expect(seen).toEqual([{ module: 'notes', name: 'written', event: 'notes.written', topic: 'notes:n-1', payload: { id: 'n-1', body: 'Hi', state: 'draft' } }]);
+    const payload = { id: 'n-1', body: 'Hi', state: 'draft' };
+    expect(seen).toEqual([
+      { module: 'notes', name: 'written', event: 'notes.written', topic: 'notes:n-1', payload },
+      { module: 'notes', name: 'written', event: 'notes.written', topic: 'notes:draft', payload },
+    ]);
   });
 });
 
@@ -286,6 +301,12 @@ describe('contractChecks', () => {
   it('fails a build that leaves out a listed event', async () => {
     expect(await failures({ skipEmit: true })).toEqual([
       'notes.write accepts good input: notes.write: succeeded without emitting "written", which it lists in emits. Emit it, or take it out of emits.',
+    ]);
+  });
+
+  it('fails a build that leaves out one of an event\'s topics', async () => {
+    expect(await failures({ dropTopic: true })).toEqual([
+      'notes.write accepts good input: notes.write: emitted "written" without publishing it on notes:{state}, which events.written.topic lists',
     ]);
   });
 

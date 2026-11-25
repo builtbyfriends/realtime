@@ -1,5 +1,5 @@
 import type { CommandSpec, Contract, EventSpec } from './contract.js';
-import { MOVE_NOT_ALLOWED, isReason, kebab } from './contract.js';
+import { MOVE_NOT_ALLOWED, isReason, kebab, topicsOf } from './contract.js';
 import { fieldsOf, schemaAt, schemasAt, typeOf, wordsAt } from './json-schema.js';
 import type { JsonSchema } from './schema.js';
 
@@ -102,7 +102,7 @@ function commandText(contract: Contract, name: string, cmd: CommandSpec): string
 }
 
 function eventText(contract: Contract, name: string, ev: EventSpec): string {
-  return [`${contract.name}.${name} on ${ev.topic}`, `  ${ev.description}`, `  Payload: ${valueText(contract, contract.json.events[name] ?? null)}`].join('\n');
+  return [`${contract.name}.${name} on ${topicsOf(ev).join(' and ')}`, `  ${ev.description}`, `  Payload: ${valueText(contract, contract.json.events[name] ?? null)}`].join('\n');
 }
 
 function statesText(contract: Contract): Array<string> {
