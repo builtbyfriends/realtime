@@ -93,7 +93,7 @@ export {
   type Implementation,
 } from './contract-module.js';
 
-export { memoryRunOnce, type RunOnceStore, type Settled } from './run-once.js';
+export { memoryRunOnce, storageRunOnce, type RunOnceStorage, type RunOnceStore, type Settled } from './run-once.js';
 
 export { contractDocs } from './contract-docs.js';
 
