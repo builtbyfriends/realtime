@@ -122,7 +122,10 @@ const MAX_CUT_SHORT = 10;
 
 /** How the object answers one live query over the socket. */
 /** What a live query's output is checked with: a Standard Schema, or anything with its `validate`, as in Realtime 0.4. */
-export type SyncOutputSchema = AnySchema | { readonly '~standard': { validate(value: unknown): unknown } };
+export type SyncOutputSchema = AnySchema | { readonly '~standard': { validate(value: unknown): SyncValidation | Promise<SyncValidation> } };
+
+/** What a live query's output check gives back: the checked value, or the issues it found. */
+export type SyncValidation = { readonly value?: unknown; readonly issues?: ReadonlyArray<unknown> };
 
 export type SyncQueryPlan = { fn: string; args: unknown; output?: SyncOutputSchema };
 

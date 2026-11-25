@@ -8,6 +8,7 @@
   - A sync `view` can return any object again, such as a type built from interfaces. 0.6 asked for a `JsonObject`.
   - `data.client` takes a Durable Object namespace's stub without comparing the stub's `pull`, which made TypeScript stop with "excessively deep" on a real `DurableObjectStub`.
   - A live query plan's `output` takes anything with a Standard Schema `validate` again, as 0.4 did.
+- Delivery stops at the first event that fails and tries again later, so order is kept, and an event that can never be delivered holds the ones behind it. Look in the `_realtime_outbox` table. There is no give-up count yet.
 - A package built against Realtime 0.4, such as an older `@builtbyfriends/bwf`, has its own copy of Realtime's types, so its registry won't match 0.7's. Rebuild it against 0.7.0.
 
 ## 0.6.0
