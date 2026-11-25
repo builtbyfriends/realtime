@@ -79,6 +79,8 @@ export {
   type RecordOf,
   type StateOf,
   type StatesSpec,
+  fillTopic,
+  topicsOf,
 } from './contract.js';
 
 export {

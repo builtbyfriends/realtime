@@ -119,7 +119,7 @@ export const tasks = defineContract({
     },
   },
   events: {
-    created: { description: 'A task was added.', topic: 'tasks:{id}', payload: Task },
+    created: { description: 'A task was added.', topic: ['tasks:{id}', 'tasks-by:{createdBy}'], payload: Task },
     moved: {
       description: 'A task moved from one state to another.',
       topic: 'tasks:{id}',

@@ -1,5 +1,5 @@
 import type { AuthProvider, Concern, Decisions, Handler, HandlerArgs, Procedure, State, Surface } from './builder.js';
-import { MOVE_NOT_ALLOWED, isReason, kebab, topicFields } from './contract.js';
+import { MOVE_NOT_ALLOWED, fillTopic, isReason, kebab, topicsOf } from './contract.js';
 import type {
   CommandError,
   CommandInput,
@@ -16,13 +16,12 @@ import type {
   StateOf,
   StatesSpec,
 } from './contract.js';
-import { isRecord } from './json-schema.js';
 import { isRequestToken, requestIdSchema, requestInput } from './request-id.js';
 import type { RunOnceStore, Settled } from './run-once.js';
 import type { InferIn } from './schema.js';
 import { validate } from './schema.js';
 
-/** One event a module published. `event` is "<module>.<name>", and `topic` is the contract's topic filled from the payload. */
+/** One event a module published. `event` is "<module>.<name>", and `topic` is one of the contract's topics filled from the payload. An event with several topics is published once on each. */
 export type ContractEvent = { module: string; name: string; event: string; topic: string; payload: unknown };
 
 type Ctx0 = null;
@@ -204,12 +203,6 @@ function setupProblems(contract: Contract, impl: LooseImplementation): Array<str
   return problems;
 }
 
-function renderTopic(topic: string, payload: ContractEvent['payload']): string {
-  const fields = isRecord(payload) ? payload : {};
-
-  return topicFields(topic).reduce((t, field) => t.replace(`{${field}}`, String(fields[field])), topic);
-}
-
 function moveFor(states: StatesSpec | undefined, move: string | undefined, fail: LooseArgs['fail']) {
   return (from: string): string => {
     const spec = move === undefined ? undefined : states?.moves[move];
@@ -222,7 +215,7 @@ function moveFor(states: StatesSpec | undefined, move: string | undefined, fail:
   };
 }
 
-async function checkedEvent(contract: Contract, command: string, cmd: CommandSpec, pending: Pending): Promise<ContractEvent> {
+async function checkedEvents(contract: Contract, command: string, cmd: CommandSpec, pending: Pending): Promise<Array<ContractEvent>> {
   const spec = Object.hasOwn(contract.events, pending.name) ? contract.events[pending.name] : undefined;
   const listed = cmd.emits ?? [];
 
@@ -238,7 +231,9 @@ async function checkedEvent(contract: Contract, command: string, cmd: CommandSpe
     throw new Error(`commands.${command} emitted "${pending.name}" with a payload that doesn't match events.${pending.name}.payload: ${issues}`);
   }
 
-  return { module: contract.name, name: pending.name, event: `${contract.name}.${pending.name}`, topic: renderTopic(spec.topic, r.value), payload: r.value };
+  const event = `${contract.name}.${pending.name}`;
+
+  return topicsOf(spec).map((topic) => ({ module: contract.name, name: pending.name, event, topic: fillTopic(topic, r.value), payload: r.value }));
 }
 
 class Built {
@@ -259,7 +254,7 @@ class Built {
   }
 
   async publishAll(name: string, cmd: CommandSpec, pending: Array<Pending>, args: HandlerArgs<State>): Promise<void> {
-    const events = await Promise.all(pending.map((p) => checkedEvent(this.contract, name, cmd, p)));
+    const events = (await Promise.all(pending.map((p) => checkedEvents(this.contract, name, cmd, p)))).flat();
     const publish = this.impl.publish;
 
     for (const e of events) {

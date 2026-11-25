@@ -42,7 +42,7 @@ notes.send (write)
 
 ## Events
 
-notes.written on notes:{id}
+notes.written on notes:{id} and notes:{state}
   A note was written.
   Payload: Note
 

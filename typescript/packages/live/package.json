@@ -1,6 +1,6 @@
 {
   "name": "@builtbyfriends/realtime-live",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Live queries: an RPC call plus topic subscriptions, refetched on events and reconnects",
   "type": "module",
   "sideEffects": false,
@@ -27,7 +27,7 @@
     }
   },
   "dependencies": {
-    "@builtbyfriends/realtime": "0.5.0"
+    "@builtbyfriends/realtime": "0.6.0"
   },
   "license": "MIT",
   "repository": {

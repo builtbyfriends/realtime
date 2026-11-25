@@ -1,3 +1,4 @@
+import type { ContractEvent } from './contract-module.js';
 import type { ErrorSpec } from './errors.js';
 import { toJsonSchema } from './schema.js';
 import type { AnySchema, InferIn, InferOut, JsonSchema } from './schema.js';
@@ -34,8 +35,11 @@ export type CommandSpec = {
 
 export type EventSpec = {
   description: string;
-  /** A named topic. `{field}` is filled from the payload, as in "tasks:{id}". */
-  topic: string;
+  /**
+   * A named topic, or a list of them. `{field}` is filled from the payload, as in "tasks:{id}".
+   * With a list, the event is published once on each topic, such as its record's own topic and its parent's.
+   */
+  topic: string | ReadonlyArray<string>;
   payload: AnySchema;
 };
 
@@ -128,10 +132,12 @@ type TopicFields<T extends string> = T extends `${string}{${infer F}}${infer Res
 
 type Problem<M extends string> = { '~error': M };
 
-type CheckTopic<Ev> = Ev extends { topic: infer T extends string; payload: infer P extends AnySchema }
-  ? [Exclude<TopicFields<T>, keyof InferOut<P> & string>] extends [never]
+type TopicText<T> = T extends ReadonlyArray<infer S extends string> ? S : T extends string ? T : never;
+
+type CheckTopic<Ev> = Ev extends { topic: infer T; payload: infer P extends AnySchema }
+  ? [Exclude<TopicFields<TopicText<T>>, keyof InferOut<P> & string>] extends [never]
     ? unknown
-    : { topic: Problem<`topic field {${Exclude<TopicFields<T>, keyof InferOut<P> & string>}} is not a field of the payload`> }
+    : { topic: Problem<`topic field {${Exclude<TopicFields<TopicText<T>>, keyof InferOut<P> & string>}} is not a field of the payload`> }
   : unknown;
 
 type MoveNames<C extends ContractSpec> = C['states'] extends StatesSpec ? keyof C['states']['moves'] & string : never;
@@ -167,6 +173,18 @@ const EFFECTS = new Set<string>(['read', 'write', 'destructive']);
 
 export function topicFields(topic: string): Array<string> {
   return [...topic.matchAll(TOPIC_FIELD_RE)].map((m) => m[1] ?? '');
+}
+
+/** The event's topics as a list, whether the contract gives one or several. */
+export function topicsOf(ev: EventSpec): Array<string> {
+  return [ev.topic].flat();
+}
+
+/** A topic with each `{field}` filled from the payload. */
+export function fillTopic(topic: string, payload: ContractEvent['payload']): string {
+  const fields = isRecord(payload) ? payload : {};
+
+  return topicFields(topic).reduce((t, field) => t.replace(`{${field}}`, String(fields[field])), topic);
 }
 
 export function isReason(value: string | Reason): value is Reason {
@@ -281,9 +299,19 @@ function checkEvent(name: string, ev: EventSpec, json: JsonSchema | null, proble
 
   if (!ev.description.trim()) {problems.push(`${where}.description is empty: say what happened in one sentence`);}
 
-  for (const field of topicFields(ev.topic).filter((f) => fields && !fields.has(f))) {
-    problems.push(`${where}.topic uses {${field}}, which is not a payload field (${listText(fields?.keys() ?? [])})`);
-  }
+  const topics = topicsOf(ev);
+
+  if (!topics.length) {problems.push(`${where}.topic is an empty list: name at least one topic`);}
+
+  if (new Set(topics).size !== topics.length) {problems.push(`${where}.topic lists a topic twice: each is published once, so list it once`);}
+
+  topics.forEach((topic, i) => {
+    const at = Array.isArray(ev.topic) ? `${where}.topic[${i}]` : `${where}.topic`;
+
+    for (const field of topicFields(topic).filter((f) => fields && !fields.has(f))) {
+      problems.push(`${at} uses {${field}}, which is not a payload field (${listText(fields?.keys() ?? [])})`);
+    }
+  });
 }
 
 function commandsJson(spec: ContractSpec, problems: Array<string>): ContractJson['commands'] {
