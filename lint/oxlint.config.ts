@@ -33,13 +33,19 @@ export default defineConfig({
     'anti-slop/no-unknown-parameters': 'warn',
     'anti-slop/require-readable-spacing': 'warn',
     'anti-slop/require-safety-comment-for-type-assertion': ['warn', { markers: ['Decision'] }],
+    // Decision: Limits that point at functions to split. They warn, so the list shows what to split first.
+    complexity: ['warn', { max: 15 }],
+    'max-depth': ['warn', 4],
+    'max-lines-per-function': ['warn', { max: 150, skipBlankLines: true, skipComments: true }],
   },
   overrides: [
     ...(cloudflare.overrides ?? []),
     {
-      // Decision: Tests and type tests call mocks and loose fixtures, and wait with bare promises.
+      // Decision: Tests and type tests call mocks and loose fixtures, and wait with bare promises. A describe block holds a
+      // whole file's tests, so the function size limit doesn't fit there.
       files: ['**/test/**', '**/type-tests/**', '**/*.test.*'],
       rules: {
+        'max-lines-per-function': 'off',
         'no-promise-executor-return': 'off',
         'typescript/no-explicit-any': 'off',
         'typescript/no-non-null-assertion': 'off',
