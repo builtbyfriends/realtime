@@ -14,6 +14,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
