@@ -39,7 +39,9 @@ export type SyncDef<D = JsonObject> = {
    * (names, a reply's original). It runs once per reader for each change they get, so keep its reads few. Return null to
    * leave the change out for that reader. Leave it out to send the visible fields to everyone.
    */
-  view?: (doc: D, reader: SyncReader) => JsonObject | null | undefined;
+  // Decision: a view may return any object, such as a type built from interfaces, as in Realtime 0.4. It's sent as JSON, so a
+  // field JSON can't carry is dropped on the way, as JSON.stringify drops it.
+  view?: (doc: D, reader: SyncReader) => object | null | undefined;
 };
 
 /** What a `view` gets: read access and who's reading. `actor` is what the door said the caller is. */

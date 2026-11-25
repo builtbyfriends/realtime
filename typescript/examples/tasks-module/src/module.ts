@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { bearerAuth, implementContract, memoryRunOnce } from '@builtbyfriends/realtime';
-import type { CommandArgs } from '@builtbyfriends/realtime';
+import { bearerAuth, implementContract, memoryOutbox, memoryRunOnce } from '@builtbyfriends/realtime';
+import type { CommandArgs, ContractEvent } from '@builtbyfriends/realtime';
 import { tasks } from './contract.js';
 import type { Task, TaskState } from './contract.js';
 
@@ -20,10 +20,12 @@ const apiToken = bearerAuth<Caller, Env>({
   actorId: (caller) => caller.id,
 });
 
-// Decision: the example keeps its tasks in memory, so it runs with no setup. A real module keeps them with its owner, one Durable
-// Object, and the run-once store sits next to them.
+// Decision: the example keeps its tasks, request ids and events in memory, so it runs with no setup. A real module keeps them with its
+// owner, one Durable Object, using storageRunOnce and storageOutbox, and its feed is a live stream.
 export class TaskStore {
   readonly tasks = new Map<string, Task>();
+  readonly feed: Array<ContractEvent> = [];
+  feedDown = false;
   private next = 0;
 
   add(title: string, createdBy: string, state: TaskState = 'open'): Task {
@@ -43,6 +45,12 @@ export class TaskStore {
 
 type MoveArgs = CommandArgs<typeof tasks, 'start' | 'finish' | 'reopen', Caller, Env>;
 
+const ports = {
+  auth: apiToken,
+  can: ({ ctx, capability }: { ctx: Caller; capability: string }) => ctx.capabilities.includes(capability),
+  analytics: { reason: 'The example runs without an analytics provider' },
+};
+
 export function tasksModule(store: TaskStore) {
   const found = (id: string, fail: (code: 'NOT_FOUND') => never): Task => store.tasks.get(id) ?? fail('NOT_FOUND');
 
@@ -57,11 +65,14 @@ export function tasksModule(store: TaskStore) {
   };
 
   return implementContract(tasks).with({
-    auth: apiToken,
-    can: ({ ctx, capability }) => ctx.capabilities.includes(capability),
-    analytics: { reason: 'The example runs without an analytics provider' },
-    publish: { reason: 'The example has no live stream, and its tests read events from the module' },
+    ...ports,
+    publish: (event) => {
+      if (store.feedDown) {throw new Error('The feed is down');}
+
+      store.feed.push(event);
+    },
     runOnce: memoryRunOnce(),
+    outbox: memoryOutbox(),
     commands: {
       create: ({ input, ctx, fail, emit }) => {
         if (store.openWithTitle(input.title)) {return fail('TITLE_TAKEN');}
@@ -73,8 +84,7 @@ export function tasksModule(store: TaskStore) {
         return task;
       },
       get: ({ input, fail }) => found(input.id, fail),
-      list: ({ input }) =>
-        [...store.tasks.values()].filter((t) => !input.state || t.state === input.state).toReversed(),
+      list: { reason: 'The index serves it, since it reads across owners' },
       start: (args) => moveTask(args),
       finish: (args) => moveTask(args),
       reopen: (args) => moveTask(args),
@@ -86,6 +96,26 @@ export function tasksModule(store: TaskStore) {
 
         return { id: task.id };
       },
+    },
+  });
+}
+
+// Decision: list is served from a second place, as a shared index that reads across owners tends to be, so the example shows a
+// contract served from two places. In a real app the owners' events keep the index up to date.
+export function tasksIndex(store: TaskStore) {
+  const off = { reason: 'The owner serves it' };
+
+  return implementContract(tasks).with({
+    ...ports,
+    publish: { reason: 'The index only reads' },
+    commands: {
+      list: ({ input }) => [...store.tasks.values()].filter((t) => !input.state || t.state === input.state).toReversed(),
+      create: off,
+      get: off,
+      start: off,
+      finish: off,
+      reopen: off,
+      remove: off,
     },
   });
 }

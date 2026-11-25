@@ -17,6 +17,7 @@ import type {
   StatesSpec,
 } from './contract.js';
 import { isRequestToken, requestIdSchema, requestInput } from './request-id.js';
+import type { EventOutbox } from './outbox.js';
 import type { RunOnceStore, Settled } from './run-once.js';
 import type { InferIn } from './schema.js';
 import { validate } from './schema.js';
@@ -65,7 +66,13 @@ export type Implementation<C extends ContractSpec, Ctx, Env> = {
   publish: ((event: ContractEvent, env: Env) => void | Promise<void>) | Reason;
   /** Needed when a command writes. */
   runOnce?: RunOnceStore;
-  commands: { [K in CommandName<C>]: CommandHandler<C, K, Ctx, Env> };
+  /**
+   * Keeps each event until `publish` takes it, and tries again when it throws, such as `storageOutbox(ctx.storage)`. Without it, an
+   * event whose delivery fails is gone. With it, delivery is at least once, so a listener can get the same event twice.
+   */
+  outbox?: EventOutbox;
+  /** A handler for each command this place serves, or a reason for one that another place serves, such as a shared index. */
+  commands: { [K in CommandName<C>]: CommandHandler<C, K, Ctx, Env> | Reason };
 };
 
 export type ContractProcedure<C extends ContractSpec, K extends CommandName<C>> = K extends string
@@ -84,10 +91,18 @@ export type ContractProcedure<C extends ContractSpec, K extends CommandName<C>> 
 
 export type ContractModule<C extends ContractSpec> = {
   readonly contract: Contract<C>;
-  /** One procedure per command. Pass them to `defineRegistry` with the rest of the app's procedures. */
+  /** One procedure per command this place serves. Pass them to `defineRegistry` with the rest of the app's procedures. */
   readonly procedures: Array<ContractProcedure<C, CommandName<C>>>;
-  /** Each event as it's published. For tests and dev tools. */
-  readonly events: { subscribe(listener: (event: ContractEvent) => void): () => void };
+  readonly events: ModuleEvents;
+};
+
+export type ModuleEvents = {
+  /** Each event as a command emits it. For tests and dev tools. */
+  subscribe(listener: (event: ContractEvent) => void): () => void;
+  /** Tries the events the outbox still holds, oldest first, and says how many are left. Call it from the owner's `alarm()`. */
+  deliver(env: State['env']): Promise<number>;
+  /** True when an outbox keeps each event until it's delivered. */
+  readonly kept: boolean;
 };
 
 /** What `implementContract(contract)` gives back: `with` takes the handlers and the ports. */
@@ -110,13 +125,14 @@ type LooseImplementation = {
   analytics: true | Reason;
   publish: ((event: ContractEvent, env: State['env']) => void | Promise<void>) | Reason;
   runOnce?: RunOnceStore;
-  commands: Readonly<Record<string, (args: LooseArgs) => State['outRaw']>>;
+  outbox?: EventOutbox;
+  commands: Readonly<Record<string, ((args: LooseArgs) => State['outRaw']) | Reason>>;
 };
 
 type LooseModule = {
   readonly contract: Contract;
   readonly procedures: Array<Procedure>;
-  readonly events: { subscribe(listener: EventListener): () => void };
+  readonly events: ModuleEvents;
 };
 
 type LooseImplementer = { with(impl: LooseImplementation): LooseModule };
@@ -189,7 +205,11 @@ function setupProblems(contract: Contract, impl: LooseImplementation): Array<str
   const problems: Array<string> = [];
 
   for (const [name, cmd] of Object.entries(contract.commands)) {
-    if (!Object.hasOwn(impl.commands, name)) {problems.push(`commands.${name}: add its handler`);}
+    const handler = Object.hasOwn(impl.commands, name) ? impl.commands[name] : undefined;
+
+    if (!handler) {problems.push(`commands.${name}: add its handler, or { reason } when another place serves it`);}
+
+    if (!handler || 'reason' in handler) {continue;}
 
     if (!isReason(cmd.capability) && !impl.can) {problems.push(`commands.${name} needs the capability "${cmd.capability}": pass can()`);}
 
@@ -199,6 +219,8 @@ function setupProblems(contract: Contract, impl: LooseImplementation): Array<str
   for (const name of Object.keys(impl.commands).filter((n) => !Object.hasOwn(contract.commands, n))) {
     problems.push(`commands.${name} is not in the contract: add it there or remove the handler`);
   }
+
+  if (impl.outbox && 'reason' in impl.publish) {problems.push('outbox keeps events for publish, which is off: pass publish, or drop the outbox');}
 
   return problems;
 }
@@ -239,6 +261,8 @@ async function checkedEvents(contract: Contract, command: string, cmd: CommandSp
 class Built {
   readonly listeners = new Set<EventListener>();
   readonly keepMs: number;
+  private delivering: Promise<number> | null = null;
+  private again = false;
 
   constructor(
     readonly contract: Contract,
@@ -256,19 +280,65 @@ class Built {
   async publishAll(name: string, cmd: CommandSpec, pending: Array<Pending>, args: HandlerArgs<State>): Promise<void> {
     const events = (await Promise.all(pending.map((p) => checkedEvents(this.contract, name, cmd, p)))).flat();
     const publish = this.impl.publish;
+    const outbox = this.impl.outbox;
+
+    if (outbox && events.length) {outbox.keep(events);}
 
     for (const e of events) {
       for (const listener of this.listeners) {args.waitUntil(Promise.resolve().then(() => listener(e)));}
 
-      if (!('reason' in publish)) {args.waitUntil(Promise.resolve().then(() => publish(e, args.env)));}
+      if (!outbox && !('reason' in publish)) {args.waitUntil(Promise.resolve().then(() => publish(e, args.env)));}
     }
+
+    if (outbox && events.length) {args.waitUntil(this.deliver(args.env).then(() => undefined));}
+  }
+
+  async deliver(env: State['env']): Promise<number> {
+    if (this.delivering) {
+      this.again = true;
+
+      return this.delivering;
+    }
+
+    this.delivering = this.deliverAll(env).finally(() => {
+      this.delivering = null;
+    });
+
+    return this.delivering;
+  }
+
+  private async deliverAll(env: State['env']): Promise<number> {
+    const outbox = this.impl.outbox;
+    const publish = this.impl.publish;
+
+    if (!outbox || 'reason' in publish) {return 0;}
+
+    do {
+      this.again = false;
+
+      for (const kept of outbox.pending()) {
+        try {
+          await publish(kept.event, env);
+        } catch {
+          await outbox.retryLater();
+
+          return outbox.pending().length;
+        }
+
+        outbox.delivered(kept.id);
+      }
+    } while (this.again);
+
+    return outbox.pending().length;
   }
 
   async run(name: string, cmd: CommandSpec, args: HandlerArgs<State>, input: State['in']): Promise<Settled> {
     const pending: Array<Pending> = [];
     const handle = this.impl.commands[name];
 
-    const value = await handle?.({
+    if (!handle || 'reason' in handle) {throw new Error(`commands.${name} is served elsewhere (${handle?.reason ?? 'no handler'})`);}
+
+    const value = await handle({
       input,
       ctx: args.ctx,
       env: args.env,
@@ -302,18 +372,26 @@ class Built {
     return Object.freeze({ '~realtime': 'procedure', name: full, decisions: decisionsFor(this.contract, name, cmd, this.impl), profiles: [], handler });
   }
 
+  serves(name: string): boolean {
+    const handler = this.impl.commands[name];
+
+    return handler !== undefined && !('reason' in handler);
+  }
+
   module(): LooseModule {
     const listeners = this.listeners;
 
     return {
       contract: this.contract,
-      procedures: Object.entries(this.contract.commands).map(([name, cmd]) => this.procedure(name, cmd)),
+      procedures: Object.entries(this.contract.commands).filter(([name]) => this.serves(name)).map(([name, cmd]) => this.procedure(name, cmd)),
       events: {
         subscribe(listener) {
           listeners.add(listener);
 
           return () => void listeners.delete(listener);
         },
+        deliver: async (env) => this.deliver(env),
+        kept: this.impl.outbox !== undefined,
       },
     };
   }

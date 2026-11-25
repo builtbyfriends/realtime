@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { DatabaseSync } from 'node:sqlite';
-import { contractChecks, contractDocs, defineContract, defineRegistry, implementContract, memoryRunOnce, storageRunOnce } from '@builtbyfriends/realtime';
-import type { ContractEvent, RunOnceStorage, RunOnceStore } from '@builtbyfriends/realtime';
+import { contractChecks, contractDocs, defineContract, defineRegistry, implementContract, memoryOutbox, memoryRunOnce, storageOutbox, storageRunOnce } from '@builtbyfriends/realtime';
+import type { CommandArgs, ContractEvent, EventOutbox, OutboxStorage, RunOnceStorage, RunOnceStore } from '@builtbyfriends/realtime';
 
 const states = ['draft', 'sent'] as const;
 const Note = z.object({ id: z.string(), body: z.string(), state: z.enum(states) });
@@ -43,7 +43,17 @@ const notes = defineContract({
 
 type Note = z.infer<typeof Note>;
 
-type Mistakes = { skipMove?: boolean; skipEmit?: boolean; ignoreCapability?: boolean; badEvent?: boolean; dropTopic?: boolean };
+type Mistakes = {
+  skipMove?: boolean;
+  skipEmit?: boolean;
+  ignoreCapability?: boolean;
+  badEvent?: boolean;
+  dropTopic?: boolean;
+  split?: boolean;
+  forgetPlace?: boolean;
+  outbox?: EventOutbox;
+  noBreakDelivery?: boolean;
+};
 
 type Caller = { id: string; caps: ReadonlyArray<string> };
 
@@ -60,13 +70,36 @@ function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce())
   };
 
   const callers = new Map<string, Caller>();
+  const delivered: Array<ContractEvent> = [];
+  let broken = false;
+
+  const ports = {
+    auth: { name: 'test', resolve: (request: Request) => callers.get(request.headers.get('x-caller') ?? '') ?? null, actorId: (c: Caller) => c.id },
+    can: ({ ctx, capability }: { ctx: Caller; capability: string }) => mistakes.ignoreCapability === true || ctx.caps.includes(capability),
+    analytics: off,
+    runOnce,
+  };
+
+  const send = ({ input, fail, move }: CommandArgs<typeof notes, 'send', Caller, unknown>) => {
+    const note = store.get(input.id) ?? fail('NOT_FOUND');
+    const next: Note = { ...note, state: mistakes.skipMove ? 'sent' : move(note.state) };
+    store.set(note.id, next);
+
+    return next;
+  };
+
+  const elsewhere = { reason: 'The sender serves it' };
 
   const module = implementContract(notes).with({
-    auth: { name: 'test', resolve: (request) => callers.get(request.headers.get('x-caller') ?? '') ?? null, actorId: (c: Caller) => c.id },
-    can: ({ ctx, capability }) => mistakes.ignoreCapability === true || ctx.caps.includes(capability),
-    analytics: off,
-    publish: off,
-    runOnce,
+    ...ports,
+    publish: mistakes.outbox
+      ? (e: ContractEvent) => {
+          if (broken) {throw new Error('The stream is down');}
+
+          delivered.push(e);
+        }
+      : off,
+    outbox: mistakes.outbox,
     commands: {
       write: ({ input, emit }) => {
         const note = add(input.body);
@@ -80,23 +113,30 @@ function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce())
 
         return note;
       },
-      send: ({ input, fail, move }) => {
-        const note = store.get(input.id) ?? fail('NOT_FOUND');
-        const next: Note = { ...note, state: mistakes.skipMove ? 'sent' : move(note.state) };
-        store.set(note.id, next);
-
-        return next;
-      },
+      send: mistakes.split ? elsewhere : send,
     },
   });
 
-  const registry = defineRegistry(module.procedures);
+  const sender = implementContract(notes).with({ ...ports, publish: off, commands: { write: { reason: 'The owner serves it' }, send } });
+  const places = mistakes.split ? [module, sender] : [module];
+  const registry = defineRegistry(places.flatMap((p) => p.procedures));
 
   const seenBy = (listener: (e: ContractEvent) => void) => (e: ContractEvent) => (mistakes.dropTopic && e.topic === 'notes:draft' ? undefined : listener(e));
-  const observed = { ...module, events: { subscribe: (listener: (e: ContractEvent) => void) => module.events.subscribe(seenBy(listener)) } };
+  const observed = { ...module, events: { ...module.events, subscribe: (listener: (e: ContractEvent) => void) => module.events.subscribe(seenBy(listener)) } };
 
-  const checks = contractChecks(observed).with({
+  const others = mistakes.split && !mistakes.forgetPlace ? [sender] : [];
+
+  const checks = contractChecks(observed, ...others).with({
     registry,
+    breakDelivery: mistakes.noBreakDelivery
+      ? undefined
+      : () => {
+          broken = true;
+
+          return () => {
+            broken = false;
+          };
+        },
     callerWith: (caps) => {
       const id = `c-${callers.size + 1}`;
       callers.set(id, { id, caps });
@@ -110,7 +150,7 @@ function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce())
     causes: { send: { NOT_FOUND: () => ({ id: 'missing' }) } },
   });
 
-  return { module, registry, checks, callers };
+  return { module, registry, checks, callers, delivered };
 }
 
 async function failures(mistakes: Mistakes): Promise<Array<string>> {
@@ -193,13 +233,9 @@ describe('implementContract', () => {
   it('lists what the implementation is missing', () => {
     // Decision: the types refuse this implementation, so the cast stands in for plain JavaScript that skipped them.
     expect(() => implementContract(notes).with({ auth: off, analytics: off, publish: off, commands: { extra: () => null } } as any)).toThrowErrorMatchingInlineSnapshot(`
-      [Error: implementation of contract "notes" has 7 problem(s):
-        - commands.write: add its handler
-        - commands.write needs the capability "notes.write": pass can()
-        - commands.write writes: pass runOnce, such as memoryRunOnce()
-        - commands.send: add its handler
-        - commands.send needs the capability "notes.send": pass can()
-        - commands.send writes: pass runOnce, such as memoryRunOnce()
+      [Error: implementation of contract "notes" has 3 problem(s):
+        - commands.write: add its handler, or { reason } when another place serves it
+        - commands.send: add its handler, or { reason } when another place serves it
         - commands.extra is not in the contract: add it there or remove the handler]
     `);
   });
@@ -287,9 +323,73 @@ describe('storageRunOnce', () => {
   });
 });
 
+function outboxStorage(db = new DatabaseSync(':memory:')): OutboxStorage & { alarm: () => number | null } {
+  let alarm: number | null = null;
+
+  return {
+    ...sqliteStorage(db),
+    alarm: () => alarm,
+    getAlarm: async () => alarm,
+    setAlarm: async (at: number) => {
+      alarm = at;
+    },
+  };
+}
+
+describe('storageOutbox', () => {
+  it('keeps events across a restart until each is delivered, and sets an alarm to try again', async () => {
+    const db = new DatabaseSync(':memory:');
+    const storage = outboxStorage(db);
+    const event: ContractEvent = { module: 'notes', name: 'written', event: 'notes.written', topic: 'notes:n-1', payload: { id: 'n-1' } };
+    const first = storageOutbox(storage, { now: () => 1000, retryAfterMs: 500 });
+    const [kept] = first.keep([event, { ...event, topic: 'notes:draft' }]);
+    await first.retryLater();
+    expect(storage.alarm()).toBe(1500);
+    const restarted = storageOutbox(storage);
+    expect(restarted.pending().map((k) => k.event.topic)).toEqual(['notes:n-1', 'notes:draft']);
+    restarted.delivered(kept?.id ?? '');
+    expect(restarted.pending()).toEqual([{ id: '2', event: { ...event, topic: 'notes:draft' } }]);
+  });
+
+  it('passes the delivery check', async () => {
+    const checks = build({ outbox: storageOutbox(outboxStorage()) }).checks.filter((c) => c.name.includes('delivered'));
+    expect(checks.map((c) => c.name)).toEqual(["notes.write keeps its events until they're delivered"]);
+
+    for (const check of checks) {await check.run();}
+  });
+});
+
 describe('contractChecks', () => {
   it('passes a build that keeps the contract', async () => {
     expect(await failures({})).toEqual([]);
+  });
+
+  it('checks a contract served from two places once, across both', async () => {
+    const { checks, module } = build({ split: true });
+    expect(module.procedures.map((p) => p.name)).toEqual(['notes.write']);
+    expect(checks.filter((c) => c.name.startsWith('notes.send')).length).toBeGreaterThan(3);
+    expect(await failures({ split: true })).toEqual([]);
+  });
+
+  it('fails a command that no place given to it serves', async () => {
+    expect(await failures({ split: true, forgetPlace: true })).toEqual([
+      'notes.send is served by a place: notes.send: the one place given to contractChecks gives a reason instead of a handler. Give one place its handler, or pass the place that serves it.',
+    ]);
+  });
+
+  it('passes a build with an outbox, and checks that a failed delivery is tried again', async () => {
+    expect(await failures({ outbox: memoryOutbox() })).toEqual([]);
+    expect(await failures({ outbox: memoryOutbox(), noBreakDelivery: true })).toEqual([
+      "notes.write keeps its events until they're delivered: notes.write: its place has an outbox, so pass breakDelivery to contractChecks to check that a failed delivery is tried again",
+    ]);
+  });
+
+  it('fails a build whose outbox loses an event that failed to go out', async () => {
+    const lossy = memoryOutbox();
+    const forgetful: EventOutbox = { ...lossy, pending: () => [] };
+    expect(await failures({ outbox: forgetful })).toEqual([
+      "notes.write keeps its events until they're delivered: notes.write: a failed delivery left nothing in the outbox. Keep each event until publish takes it.",
+    ]);
   });
 
   it('names the check and what to change when a build skips the state list', async () => {

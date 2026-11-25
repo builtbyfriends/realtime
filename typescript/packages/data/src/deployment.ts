@@ -121,9 +121,12 @@ export type DataDefinition<S extends Schema, F extends Record<string, AnyFn>, J 
 const MAX_CUT_SHORT = 10;
 
 /** How the object answers one live query over the socket. */
-export type SyncQueryPlan = { fn: string; args: unknown; output?: AnySchema };
+/** What a live query's output is checked with: a Standard Schema, or anything with its `validate`, as in Realtime 0.4. */
+export type SyncOutputSchema = AnySchema | { readonly '~standard': { validate(value: unknown): unknown } };
 
-type Stub = Pick<DataObject, 'run' | 'job' | 'pull'>;
+export type SyncQueryPlan = { fn: string; args: unknown; output?: SyncOutputSchema };
+
+type Stub = Pick<DataObject, 'run' | 'job'>;
 type Namespace<Id> = { idFromName(name: string): Id; get(id: Id): Stub };
 
 export type Data<S extends Schema, F extends Record<string, AnyFn>, _J extends Record<string, JobFn<F>>> = {
@@ -360,8 +363,9 @@ export class Engine {
     try {
       const value = await this.run('query', plan.fn, plan.args);
       if (!plan.output) {return { value };}
-      const checked = await plan.output['~standard'].validate(value);
-      return checked.issues ? { error: 'invalid output' } : { value: checked.value };
+      const checked: unknown = await plan.output['~standard'].validate(value);
+      if (!isJsonObject(checked) || checked.issues) {return { error: 'invalid output' };}
+      return { value: checked.value };
     } catch (error) {
       // Decision: the device gets a fixed text, as an HTTP caller gets INTERNAL. The error's own text can name tables and fields.
       console.error(`live query "${name}" failed`, error);
@@ -398,8 +402,8 @@ export class Engine {
       // reader at that document on each pull, and leaving the change out would let the reader keep a copy it may not see now.
       try {
         const doc: unknown = ctx.db.get(c.table, c.id);
-        const seen = isJsonObject(doc) ? view(doc, ctx) : null;
-        if (seen) {out.push({ ...c, doc: seen });}
+        const seen: unknown = isJsonObject(doc) ? view(doc, ctx) : null;
+        if (isJsonObject(seen)) {out.push({ ...c, doc: seen });}
       } catch (error) {
         console.error(`sync view of ${c.table} ${c.id} failed`, error);
         out.push({ ...c, doc: null });
