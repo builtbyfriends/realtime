@@ -49,10 +49,10 @@
     "examples/tasks-module": {
       "name": "realtime-tasks-example",
       "dependencies": {
-        "@builtbyfriends/realtime": "0.4.0",
-        "@builtbyfriends/realtime-ai": "0.4.0",
-        "@builtbyfriends/realtime-http": "0.4.0",
-        "@builtbyfriends/realtime-mcp": "0.4.0",
+        "@builtbyfriends/realtime": "0.5.0",
+        "@builtbyfriends/realtime-ai": "0.5.0",
+        "@builtbyfriends/realtime-http": "0.5.0",
+        "@builtbyfriends/realtime-mcp": "0.5.0",
         "@modelcontextprotocol/server": "2.4.0",
         "agents": "0.34.0",
         "zod": "4.6.7",
@@ -60,28 +60,28 @@
     },
     "packages/ai": {
       "name": "@builtbyfriends/realtime-ai",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
-        "@builtbyfriends/realtime": "0.4.0",
+        "@builtbyfriends/realtime": "0.5.0",
       },
     },
     "packages/analytics": {
       "name": "@builtbyfriends/realtime-analytics",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
-        "@builtbyfriends/realtime": "0.4.0",
+        "@builtbyfriends/realtime": "0.5.0",
       },
     },
     "packages/bwf": {
       "name": "@builtbyfriends/realtime-bwf",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
-        "@builtbyfriends/realtime": "0.4.0",
-        "@builtbyfriends/realtime-ai": "0.4.0",
-        "@builtbyfriends/realtime-analytics": "0.4.0",
-        "@builtbyfriends/realtime-http": "0.4.0",
-        "@builtbyfriends/realtime-live": "0.4.0",
-        "@builtbyfriends/realtime-mcp": "0.4.0",
+        "@builtbyfriends/realtime": "0.5.0",
+        "@builtbyfriends/realtime-ai": "0.5.0",
+        "@builtbyfriends/realtime-analytics": "0.5.0",
+        "@builtbyfriends/realtime-http": "0.5.0",
+        "@builtbyfriends/realtime-live": "0.5.0",
+        "@builtbyfriends/realtime-mcp": "0.5.0",
         "eventsource-parser": "^4.1.3",
       },
       "peerDependencies": {
@@ -96,40 +96,40 @@
     },
     "packages/cli": {
       "name": "@builtbyfriends/realtime-cli",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "bin": {
         "realtime": "./dist/bin.js",
       },
       "dependencies": {
-        "@builtbyfriends/realtime": "0.4.0",
+        "@builtbyfriends/realtime": "0.5.0",
       },
     },
     "packages/core": {
       "name": "@builtbyfriends/realtime",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
         "@standard-schema/spec": "^1.1.0",
       },
     },
     "packages/data": {
       "name": "@builtbyfriends/realtime-data",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
-        "@builtbyfriends/realtime": "0.4.0",
+        "@builtbyfriends/realtime": "0.5.0",
       },
     },
     "packages/http": {
       "name": "@builtbyfriends/realtime-http",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
-        "@builtbyfriends/realtime": "0.4.0",
+        "@builtbyfriends/realtime": "0.5.0",
       },
     },
     "packages/live": {
       "name": "@builtbyfriends/realtime-live",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
-        "@builtbyfriends/realtime": "0.4.0",
+        "@builtbyfriends/realtime": "0.5.0",
       },
       "peerDependencies": {
         "react": ">=18",
@@ -140,9 +140,9 @@
     },
     "packages/mcp": {
       "name": "@builtbyfriends/realtime-mcp",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
-        "@builtbyfriends/realtime": "0.4.0",
+        "@builtbyfriends/realtime": "0.5.0",
       },
       "peerDependencies": {
         "@modelcontextprotocol/server": "^2.4.0",

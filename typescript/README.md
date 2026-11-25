@@ -229,6 +229,12 @@ them first: a move or event the contract doesn't list, a failure a command doesn
 example that doesn't match the input. Events are checked against their schema and published after the handler succeeds, so a failed
 or repeated call publishes nothing.
 
+A write's `requestId` and first result live in a `RunOnceStore`. `storageRunOnce(ctx.storage)` keeps them in a Durable Object's own
+SQLite, next to the state they guard, so a retry after a restart still gets the first result. `memoryRunOnce()` keeps them in memory,
+for tests and examples. A handler's changes aren't rolled back when one of its events fails its schema afterwards: the call answers
+500 and keeps nothing, so a retry runs the handler again. `contractChecks` runs each command, so a bad payload tends to show up there
+before it ships.
+
 `contractDocs(tasks)` writes one short plain-text page for people and models. `contractChecks(module).with({ registry, callerWith,
 arrange, causes })` lists tests that run from the outside through the registry: each command with good and bad input, a caller
 without the capability, a repeated requestId (one after the other and at the same time), each listed move, each unlisted move and

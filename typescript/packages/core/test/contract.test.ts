@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { contractChecks, contractDocs, defineContract, defineRegistry, implementContract, memoryRunOnce } from '@builtbyfriends/realtime';
-import type { ContractEvent } from '@builtbyfriends/realtime';
+import { DatabaseSync } from 'node:sqlite';
+import { contractChecks, contractDocs, defineContract, defineRegistry, implementContract, memoryRunOnce, storageRunOnce } from '@builtbyfriends/realtime';
+import type { ContractEvent, RunOnceStorage, RunOnceStore } from '@builtbyfriends/realtime';
 
 const states = ['draft', 'sent'] as const;
 const Note = z.object({ id: z.string(), body: z.string(), state: z.enum(states) });
@@ -46,7 +47,7 @@ type Mistakes = { skipMove?: boolean; skipEmit?: boolean; ignoreCapability?: boo
 
 type Caller = { id: string; caps: ReadonlyArray<string> };
 
-function build(mistakes: Mistakes = {}) {
+function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce()) {
   const store = new Map<string, Note>();
   let seq = 0;
 
@@ -65,7 +66,7 @@ function build(mistakes: Mistakes = {}) {
     can: ({ ctx, capability }) => mistakes.ignoreCapability === true || ctx.caps.includes(capability),
     analytics: off,
     publish: off,
-    runOnce: memoryRunOnce(),
+    runOnce,
     commands: {
       write: ({ input, emit }) => {
         const note = add(input.body);
@@ -236,6 +237,38 @@ describe('memoryRunOnce', () => {
     expect(await store.run('k', 1000, async () => ({ value: 'second' }))).toEqual({ value: 'second' });
     now = 1000;
     expect(await store.run('k', 1000, async () => ({ value: 'third' }))).toEqual({ value: 'third' });
+  });
+});
+
+function sqliteStorage(db = new DatabaseSync(':memory:')): RunOnceStorage {
+  // Decision: node:sqlite rows have the same columns a Durable Object's SQLite returns for these queries.
+  return { sql: { exec: (query, ...bindings) => ({ toArray: () => db.prepare(query).all(...bindings) as Array<any> }) } };
+}
+
+describe('storageRunOnce', () => {
+  it('gives the first result after a restart, and lets a key go after its time', async () => {
+    const db = new DatabaseSync(':memory:');
+    let now = 0;
+    const first = storageRunOnce(sqliteStorage(db), () => now);
+    expect(await first.run('k', 1000, async () => ({ value: { id: 'n-1' } }))).toEqual({ value: { id: 'n-1' } });
+    const restarted = storageRunOnce(sqliteStorage(db), () => now);
+    expect(await restarted.run('k', 1000, async () => ({ value: 'second' }))).toEqual({ value: { id: 'n-1' } });
+    now = 1000;
+    expect(await restarted.run('k', 1000, async () => ({ value: 'third' }))).toEqual({ value: 'third' });
+    expect(db.prepare('SELECT count(*) AS n FROM _realtime_run_once').get()).toEqual({ n: 1 });
+  });
+
+  it('keeps nothing from a run that throws', async () => {
+    const store = storageRunOnce(sqliteStorage());
+    await expect(store.run('k', 1000, () => Promise.reject(new Error('down')))).rejects.toThrow('down');
+    expect(await store.run('k', 1000, async () => ({ value: 'again' }))).toEqual({ value: 'again' });
+  });
+
+  it('passes the retry checks', async () => {
+    const retries = build({}, storageRunOnce(sqliteStorage())).checks.filter((c) => c.name.includes('runs once'));
+    expect(retries).toHaveLength(4);
+
+    for (const check of retries) {await check.run();}
   });
 });
 
