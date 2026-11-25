@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { bearerAuth, implementContract, memoryRunOnce } from '@builtbyfriends/realtime';
+import type { CommandArgs } from '@builtbyfriends/realtime';
 import { tasks } from './contract.js';
 import type { Task, TaskState } from './contract.js';
 
@@ -40,13 +41,17 @@ export class TaskStore {
   }
 }
 
+type MoveArgs = CommandArgs<typeof tasks, 'start' | 'finish' | 'reopen', Caller, Env>;
+
 export function tasksModule(store: TaskStore) {
   const found = (id: string, fail: (code: 'NOT_FOUND') => never): Task => store.tasks.get(id) ?? fail('NOT_FOUND');
 
-  const moved = (task: Task, to: TaskState): Task => {
-    const next = { ...task, state: to };
+  const moveTask = ({ input, fail, move, emit }: MoveArgs): Task => {
+    const task = found(input.id, fail);
+    const next = { ...task, state: move(task.state) };
 
     store.tasks.set(task.id, next);
+    emit('moved', { id: task.id, from: task.state, to: next.state });
 
     return next;
   };
@@ -70,30 +75,9 @@ export function tasksModule(store: TaskStore) {
       get: ({ input, fail }) => found(input.id, fail),
       list: ({ input }) =>
         [...store.tasks.values()].filter((t) => !input.state || t.state === input.state).toReversed(),
-      start: ({ input, fail, move, emit }) => {
-        const task = found(input.id, fail);
-        const next = moved(task, move(task.state));
-
-        emit('moved', { id: task.id, from: task.state, to: next.state });
-
-        return next;
-      },
-      finish: ({ input, fail, move, emit }) => {
-        const task = found(input.id, fail);
-        const next = moved(task, move(task.state));
-
-        emit('moved', { id: task.id, from: task.state, to: next.state });
-
-        return next;
-      },
-      reopen: ({ input, fail, move, emit }) => {
-        const task = found(input.id, fail);
-        const next = moved(task, move(task.state));
-
-        emit('moved', { id: task.id, from: task.state, to: next.state });
-
-        return next;
-      },
+      start: (args) => moveTask(args),
+      finish: (args) => moveTask(args),
+      reopen: (args) => moveTask(args),
       remove: ({ input, fail, emit }) => {
         const task = found(input.id, fail);
 
