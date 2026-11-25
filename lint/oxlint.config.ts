@@ -6,7 +6,12 @@ const effect = 'react-you-might-not-need-an-effect';
 export default defineConfig({
   ...cloudflare,
   ignorePatterns: ['**/node_modules/**', '**/dist/**', '**/.bwf/**', '**/bwf/demo/db/migrations/**'],
-  jsPlugins: [...(cloudflare.jsPlugins ?? []), './comments.mjs', 'eslint-plugin-react-you-might-not-need-an-effect'],
+  jsPlugins: [
+    ...(cloudflare.jsPlugins ?? []),
+    './comments.mjs',
+    'eslint-plugin-react-you-might-not-need-an-effect',
+    { name: 'anti-slop', specifier: '@aranlucas/oxlint-plugin-anti-slop' },
+  ],
   rules: {
     ...cloudflare.rules,
     'realtime/no-comments': 'error',
@@ -19,6 +24,15 @@ export default defineConfig({
     [`${effect}/no-pass-data-to-parent`]: 'error',
     [`${effect}/no-external-store-subscription`]: 'error',
     [`${effect}/no-initialize-state`]: 'error',
+    // Decision: Dillon Mulroy's anti-slop rules that Cloudflare's preset doesn't carry yet (it has the rest as `quality/*`),
+    // from a packaged copy of his repository. A cast is justified with a `Decision:` line, the one comment the comment rule keeps.
+    // They warn while older code still has reports. Fix the ones in the files you touch, and move a rule to error at zero.
+    'anti-slop/no-module-mocking': 'warn',
+    'anti-slop/no-runtime-typeof': 'warn',
+    'anti-slop/no-shape-in-symbol-names': 'warn',
+    'anti-slop/no-unknown-parameters': 'warn',
+    'anti-slop/require-readable-spacing': 'warn',
+    'anti-slop/require-safety-comment-for-type-assertion': ['warn', { markers: ['Decision'] }],
   },
   overrides: [
     ...(cloudflare.overrides ?? []),
