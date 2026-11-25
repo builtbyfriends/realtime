@@ -63,7 +63,7 @@
   },
   "homepage": "https://github.com/builtbyfriends/realtime#readme",
   "publishConfig": {
-    "access": "public"
+    "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
     "prepack": "cp ../../../LICENSE LICENSE && mkdir -p dist && cp src/devtools.html dist/devtools.html"
