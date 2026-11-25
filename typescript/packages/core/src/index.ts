@@ -25,6 +25,7 @@ export {
   type Undecided,
   withProcedureName,
 } from './builder.js';
+
 export {
   defineRegistry,
   type AnalyticsEvent,
@@ -44,7 +45,56 @@ export {
   type RegistryOptions,
   type Success,
 } from './registry.js';
+
 export { BUILTIN_ERRORS, ProcedureError, type BuiltinErrorCode, type ErrorSpec, type Failure } from './errors.js';
+
 export { JUNK_REASONS, reasonProblem, type CheckReason, type ReasonMessage } from './reason.js';
+
 export { toJsonSchema, validate, type AnySchema, type InferIn, type InferOut, type JsonSchema } from './schema.js';
+
 export { anyOf, bearerAuth } from './auth.js';
+
+export {
+  MOVE_NOT_ALLOWED,
+  defineContract,
+  type CommandError,
+  type CommandInput,
+  type CommandName,
+  type CommandOutput,
+  type CommandSpec,
+  type Contract,
+  type ContractJson,
+  type ContractSpec,
+  type Effect,
+  type EmitsOf,
+  type EventName,
+  type EventPayload,
+  type EventSpec,
+  type GoodInput,
+  type HandlerOutput,
+  type MoveOf,
+  type MoveSpec,
+  type ParsedInput,
+  type Reason,
+  type RecordOf,
+  type StateOf,
+  type StatesSpec,
+} from './contract.js';
+
+export {
+  implementContract,
+  type CapabilityQuestion,
+  type CommandArgs,
+  type CommandHandler,
+  type ContractEvent,
+  type ContractImplementer,
+  type ContractModule,
+  type ContractProcedure,
+  type Implementation,
+} from './contract-module.js';
+
+export { memoryRunOnce, type RunOnceStore, type Settled } from './run-once.js';
+
+export { contractDocs } from './contract-docs.js';
+
+export { contractChecks, type ContractCheck, type ContractChecker, type ContractFixtures } from './contract-checks.js';

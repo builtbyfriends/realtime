@@ -1,0 +1,9 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "realtime-tasks-example",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-11-01",
+  "vars": {
+    "API_TOKENS": "{\"t-writer\":{\"id\":\"u-writer\",\"capabilities\":[\"tasks.read\",\"tasks.write\",\"tasks.remove\"]},\"t-reader\":{\"id\":\"u-reader\",\"capabilities\":[\"tasks.read\"]}}"
+  }
+}

@@ -1,0 +1,9 @@
+| procedure | profiles | authn | authz | input | output | errors | analytics | mcp | cli | aiTool |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| tasks.create | - | auth(api-token) | policy(tasks.write) | schema(zod+requestId) | schema(zod) | TITLE_TAKEN | none: The example runs without an analytics provider | tool(write) | command(tasks create) | tool(no approval) |
+| tasks.finish | - | auth(api-token) | policy(tasks.write) | schema(zod+requestId) | schema(zod) | MOVE_NOT_ALLOWED NOT_FOUND | none: The example runs without an analytics provider | tool(write) | command(tasks finish) | tool(no approval) |
+| tasks.get | - | auth(api-token) | policy(tasks.read) | schema(zod) | schema(zod) | NOT_FOUND | none: The example runs without an analytics provider | tool(read) | command(tasks get) | tool(no approval) |
+| tasks.list | - | auth(api-token) | policy(tasks.read) | schema(zod) | schema(zod) | none: The contract lists no ways for this command to fail | none: The example runs without an analytics provider | tool(read) | command(tasks list) | tool(no approval) |
+| tasks.remove | - | auth(api-token) | policy(tasks.remove) | schema(zod+requestId) | schema(zod) | NOT_FOUND | none: The example runs without an analytics provider | none: Deleting work stays a choice a person makes | command(tasks remove) | none: Deleting work stays a choice a person makes |
+| tasks.reopen | - | auth(api-token) | policy(tasks.write) | schema(zod+requestId) | schema(zod) | MOVE_NOT_ALLOWED NOT_FOUND | none: The example runs without an analytics provider | tool(write) | command(tasks reopen) | tool(needs approval) |
+| tasks.start | - | auth(api-token) | policy(tasks.write) | schema(zod+requestId) | schema(zod) | MOVE_NOT_ALLOWED NOT_FOUND | none: The example runs without an analytics provider | tool(write) | command(tasks start) | tool(no approval) |

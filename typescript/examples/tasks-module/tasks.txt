@@ -1,0 +1,118 @@
+# tasks
+
+A piece of work that someone opens, starts and finishes.
+
+## Records
+
+Task
+  id: string
+  title: string
+  state: open | doing | done
+  createdBy: string
+
+## States
+
+Task.state is one of open, doing, done, and starts at open.
+  start: open -> doing
+  finish: doing -> done
+  reopen: doing or done -> open
+A move that isn't listed is refused with MOVE_NOT_ALLOWED (409).
+
+## Commands
+
+tasks.create (write)
+  Add a task. It starts open.
+  Needs: tasks.write
+  Input: title: string; requestId: string
+  Output: Task
+  Fails: TITLE_TAKEN (409) A task with this title is already open
+  Emits: created
+  Bot tool: yes
+  Command line: tasks create
+  Example: {"title":"Water the plants","requestId":"r-1"}
+
+tasks.get (read)
+  Show one task.
+  Needs: tasks.read
+  Input: id: string
+  Output: Task
+  Fails: NOT_FOUND (404) No task with this id
+  Bot tool: yes
+  Command line: tasks get
+  Example: {"id":"t-1"}
+
+tasks.list (read)
+  List tasks, newest first, optionally in one state.
+  Needs: tasks.read
+  Input: state?: open | doing | done
+  Output: list of Task
+  Fails: only with the pipeline's own errors
+  Bot tool: yes
+  Command line: tasks list
+  Example: {"state":"doing"}
+
+tasks.start (write)
+  Start working on an open task.
+  Needs: tasks.write
+  Input: id: string; requestId: string
+  Output: Task
+  Moves: start, open -> doing
+  Fails: NOT_FOUND (404) No task with this id; MOVE_NOT_ALLOWED (409) when the current state isn't one it moves from
+  Emits: moved
+  Bot tool: yes
+  Command line: tasks start
+  Example: {"id":"t-1","requestId":"r-1"}
+
+tasks.finish (write)
+  Mark a task in progress as done.
+  Needs: tasks.write
+  Input: id: string; requestId: string
+  Output: Task
+  Moves: finish, doing -> done
+  Fails: NOT_FOUND (404) No task with this id; MOVE_NOT_ALLOWED (409) when the current state isn't one it moves from
+  Emits: moved
+  Bot tool: yes
+  Command line: tasks finish
+  Example: {"id":"t-1","requestId":"r-1"}
+
+tasks.reopen (write)
+  Open a task again after it was started or done.
+  Needs: tasks.write
+  Input: id: string; requestId: string
+  Output: Task
+  Moves: reopen, doing or done -> open
+  Fails: NOT_FOUND (404) No task with this id; MOVE_NOT_ALLOWED (409) when the current state isn't one it moves from
+  Emits: moved
+  Bot tool: yes, a person approves each call
+  Command line: tasks reopen
+  Example: {"id":"t-1","requestId":"r-1"}
+
+tasks.remove (destructive)
+  Delete a task for good.
+  Needs: tasks.remove
+  Input: id: string; requestId: string
+  Output: { id: string }
+  Fails: NOT_FOUND (404) No task with this id
+  Emits: removed
+  Bot tool: no (Deleting work stays a choice a person makes)
+  Command line: tasks remove
+  Example: {"id":"t-1","requestId":"r-1"}
+
+## Events
+
+tasks.created on tasks:{id}
+  A task was added.
+  Payload: Task
+
+tasks.moved on tasks:{id}
+  A task moved from one state to another.
+  Payload: { id: string; from: open | doing | done; to: open | doing | done }
+
+tasks.removed on tasks:{id}
+  A task was deleted.
+  Payload: { id: string }
+
+## Retries
+
+A write command takes a requestId. The module keeps each id with the first call's result for 24 hours, for each caller, next to its own state.
+A call with an id it still keeps, at the same time or later, gets the first result and publishes no event. A call that failed keeps nothing, so a retry runs again.

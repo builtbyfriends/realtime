@@ -1,0 +1,54 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`contractDocs > writes one plain-text page from the contract 1`] = `
+"# notes
+
+A short note that can be sent once.
+
+## Records
+
+Note
+  id: string
+  body: string
+  state: draft | sent
+
+## States
+
+Note.state is one of draft, sent, and starts at draft.
+  send: draft -> sent
+A move that isn't listed is refused with MOVE_NOT_ALLOWED (409).
+
+## Commands
+
+notes.write (write)
+  Write a note.
+  Needs: notes.write
+  Input: body: string; requestId: string
+  Output: Note
+  Fails: only with the pipeline's own errors
+  Emits: written
+  Bot tool: yes
+  Command line: notes write
+
+notes.send (write)
+  Send a note.
+  Needs: notes.send
+  Input: id: string; requestId: string
+  Output: Note
+  Moves: send, draft -> sent
+  Fails: NOT_FOUND (404) No such note; MOVE_NOT_ALLOWED (409) when the current state isn't one it moves from
+  Bot tool: no (Covered by a unit test only)
+  Command line: no (Covered by a unit test only)
+
+## Events
+
+notes.written on notes:{id}
+  A note was written.
+  Payload: Note
+
+## Retries
+
+A write command takes a requestId. The module keeps each id with the first call's result for 1 hour, for each caller, next to its own state.
+A call with an id it still keeps, at the same time or later, gets the first result and publishes no event. A call that failed keeps nothing, so a retry runs again.
+"
+`;
