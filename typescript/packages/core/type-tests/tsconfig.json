@@ -1,1 +1,1 @@
-{ "extends": "../../../tsconfig.base.json", "compilerOptions": { "noEmit": true, "composite": false, "declaration": false, "declarationMap": false, "noUnusedLocals": false, "paths": { "@builtbyfriends/realtime": ["../src/index.ts"] } }, "include": ["pass.ts"] }
+{ "extends": "../../../tsconfig.base.json", "compilerOptions": { "noEmit": true, "composite": false, "declaration": false, "declarationMap": false, "noUnusedLocals": false, "paths": { "@builtbyfriends/realtime": ["../src/index.ts"] } }, "include": ["pass.ts", "contract.ts"] }

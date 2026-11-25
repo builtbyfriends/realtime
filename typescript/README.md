@@ -34,7 +34,7 @@ Argument of type '() => Promise<{ ids: never[]; }>' is not assignable to paramet
 
 | Package | Runs on | What it does | Dependencies |
 | --- | --- | --- | --- |
-| `@builtbyfriends/realtime` | anywhere | Builder, profiles, registry, pipeline, audit, manifest | `@standard-schema/spec` (types) |
+| `@builtbyfriends/realtime` | anywhere | Builder, profiles, registry, pipeline, audit, manifest, contracts and contract checks | `@standard-schema/spec` (types) |
 | `@builtbyfriends/realtime-http` | Worker | `POST /rpc/{name}` fetch handler, `manifest.json`, `openapi.json`; `@builtbyfriends/realtime-http/client` is a typed fetch client | none |
 | `@builtbyfriends/realtime-mcp` | Worker | Stateless MCP over Streamable HTTP via Cloudflare's `createMcpHandler` (agents/mcp/server + MCP SDK v2) | peers: `agents`, `@modelcontextprotocol/server` |
 | `@builtbyfriends/realtime-ai` | Worker | Tool definitions for the Anthropic API and the AI SDK, with approval holds | none |
@@ -174,6 +174,65 @@ mostly the MCP SDK and Zod.
 
 - Session-cookie auth provider (the example uses API tokens; `anyOf()` combines providers).
 - OAuth for MCP clients; MCP calls currently authenticate with the same bearer token.
+
+## Contracts
+
+A module's contract is one file that says what the module is: its records, its commands, its events and its states, as schemas.
+`implementContract` turns it into ordinary procedures, so the app call, the MCP and AI tools, the CLI, the typed client, the audit
+and the docs come from that one file. Hand-written procedures keep working next to it.
+
+```ts
+export const tasks = defineContract({
+  name: 'tasks',
+  description: 'A piece of work that someone opens, starts and finishes.',
+  data: { Task },                                          // records, as schemas; types come from them
+  states: { record: 'Task', field: 'state', list: ['open', 'doing', 'done'], initial: 'open',
+    moves: { start: { from: ['open'], to: 'doing' } } },   // a move that isn't listed is refused
+  requestIds: { keepHours: 24 },                           // how long a retry is recognised
+  commands: {
+    start: {
+      description: 'Start working on an open task.',
+      effect: 'write',                                     // writes take a requestId and run once per id
+      input: z.object({ id: z.string() }),
+      output: Task,
+      errors: { NOT_FOUND: { status: 404, message: 'No task with this id' } },
+      capability: 'tasks.write',                           // the right a caller needs, as plain data
+      tool: { needsApproval: false },                      // or { reason } to keep it from bots
+      cli: true,                                           // `tasks start`, or { reason }
+      move: 'start',
+      emits: ['moved'],
+    },
+  },
+  events: { moved: { description: 'A task changed state.', topic: 'tasks:{id}', payload: Moved } },
+});
+
+export const module = implementContract(tasks).with({
+  auth: apiToken,
+  can: ({ ctx, capability }) => ctx.capabilities.includes(capability),
+  analytics: true,
+  publish: (event, env) => live.withEnv(env).publish(event.topic, event.payload),
+  runOnce: memoryRunOnce(),
+  commands: {
+    start: ({ input, fail, move, emit }) => {
+      const task = store.get(input.id) ?? fail('NOT_FOUND');
+      const next = { ...task, state: move(task.state) };    // MOVE_NOT_ALLOWED unless the contract lists it
+      emit('moved', { id: task.id, from: task.state, to: next.state });
+      return next;
+    },
+  },
+});
+export const registry = defineRegistry([...module.procedures, ...otherProcedures]);
+```
+
+`defineContract` and `implementContract` throw one error that lists each problem and what to change, and the types catch most of
+them first: a move or event the contract doesn't list, a failure a command doesn't list, a topic field that isn't in the payload, an
+example that doesn't match the input. Events are checked against their schema and published after the handler succeeds, so a failed
+or repeated call publishes nothing.
+
+`contractDocs(tasks)` writes one short plain-text page for people and models. `contractChecks(module).with({ registry, callerWith,
+arrange, causes })` lists tests that run from the outside through the registry: each command with good and bad input, a caller
+without the capability, a repeated requestId (one after the other and at the same time), each listed move, each unlisted move and
+each listed failure. [`examples/tasks-module`](examples/tasks-module/GUIDE.md) is a full module built this way.
 
 ## Data and live queries
 

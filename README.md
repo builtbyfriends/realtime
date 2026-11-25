@@ -14,6 +14,8 @@ Realtime helps you build procedures for Cloudflare Workers. A procedure is one t
 
 The procedure doesn't compile until you choose all nine. To leave one out, you write down why. This makes each choice easy to see in a review.
 
+A module can also start from a contract: one file with its records, commands, events and states as schemas. The procedures, tools, command line entries, types and a plain-text docs page come from it, and a set of contract checks tests any build of the module against it. See [Contracts](typescript/README.md#contracts).
+
 The packages are `@builtbyfriends/realtime` and `@builtbyfriends/realtime-*` on npm. The code is in [`typescript/`](typescript/README.md). It has the builder, an HTTP handler, MCP, AI tools, analytics, a CLI, a Durable Object data layer and live queries.
 
 ## Use it with bwf
