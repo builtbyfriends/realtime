@@ -83,6 +83,32 @@ implementContract(notes).with({
   },
 });
 
+implementContract(notes).with({
+  auth: off,
+  can: () => true,
+  analytics: off,
+  publish: off,
+  runOnce: memoryRunOnce(),
+  commands: {
+    write: { reason: 'The writer serves it' },
+    send: ({ input }) => {
+      expectTypeOf(input).toEqualTypeOf<{ id: string }>();
+
+      return { id: input.id, body: '', state: 'sent' };
+    },
+  },
+});
+
+implementContract(notes).with({
+  auth: off,
+  can: () => true,
+  analytics: off,
+  publish: off,
+  runOnce: memoryRunOnce(),
+  // @ts-expect-error: a command with neither a handler nor a reason
+  commands: { write: { reason: 'The writer serves it' } },
+});
+
 defineContract({
   name: 'broken',
   description: 'Mistakes the types catch.',

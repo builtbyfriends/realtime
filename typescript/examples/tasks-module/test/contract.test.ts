@@ -1,17 +1,25 @@
 import { describe, it } from 'vitest';
 import { contractChecks, defineRegistry } from '@builtbyfriends/realtime';
-import { TaskStore, tasksModule } from '../src/module.js';
+import { TaskStore, tasksIndex, tasksModule } from '../src/module.js';
 import type { Env } from '../src/module.js';
 
 const store = new TaskStore();
 const module = tasksModule(store);
-const registry = defineRegistry(module.procedures);
+const index = tasksIndex(store);
+const registry = defineRegistry([...module.procedures, ...index.procedures]);
 const callers = new Map<string, { id: string; capabilities: ReadonlyArray<string> }>();
 const env: Env = { get API_TOKENS() { return JSON.stringify(Object.fromEntries(callers)); } };
 
-const checks = contractChecks(module).with({
+const checks = contractChecks(module, index).with({
   registry,
   env,
+  breakDelivery: () => {
+    store.feedDown = true;
+
+    return () => {
+      store.feedDown = false;
+    };
+  },
   callerWith: (capabilities) => {
     const token = `t-${callers.size + 1}`;
 

@@ -1,6 +1,6 @@
 import type { CommandSpec, CommandName, Contract, ContractSpec, GoodInput, MoveOf, StateOf } from './contract.js';
 import { fillTopic, isReason, topicsOf } from './contract.js';
-import type { ContractEvent, ContractModule } from './contract-module.js';
+import type { ContractEvent, ContractModule, ModuleEvents } from './contract-module.js';
 import type { State } from './builder.js';
 import { fieldsOf, isRecord, typeOf, wordsAt } from './json-schema.js';
 import type { CallResult, Registry } from './registry.js';
@@ -18,6 +18,8 @@ export type ContractFixtures<C extends ContractSpec> = {
   arrange: {
     [K in CommandName<C>]: (state: [MoveOf<C, K>] extends [never] ? undefined : StateOf<C>) => GoodInput<C, K> | Promise<GoodInput<C, K>>;
   };
+  /** Makes `publish` throw until the function it gives back is called. The delivery check needs it when a place has an outbox. */
+  breakDelivery?: () => () => void;
   /** For each listed failure of each command, an input that causes it. */
   causes: {
     [K in CommandName<C> as [Errors<C, K>] extends [never] ? never : K]: {
@@ -26,7 +28,7 @@ export type ContractFixtures<C extends ContractSpec> = {
   };
 };
 
-/** What `contractChecks(module)` gives back: `with` takes the fixtures and lists the checks. */
+/** What `contractChecks(...places)` gives back: `with` takes the fixtures and lists the checks. */
 export type ContractChecker<C extends ContractSpec> = { with(fixtures: ContractFixtures<C>): Array<ContractCheck> };
 
 /** One check. Each runs on its own, so a test runner can list them, as in `for (const c of checks) it(c.name, c.run)`. */
@@ -34,12 +36,13 @@ export type ContractCheck = { name: string; run: () => Promise<void> };
 
 type Sent = State['inRaw'];
 
-type LooseModule = { contract: Contract; events: { subscribe(listener: (event: ContractEvent) => void): () => void } };
+type LooseModule = { contract: Contract; procedures: ReadonlyArray<{ name: string }>; events: ModuleEvents };
 
 type LooseFixtures = {
   registry: Registry;
   env?: unknown;
   callerWith: (capabilities: ReadonlyArray<string>) => Request;
+  breakDelivery?: () => () => void;
   arrange: Readonly<Record<string, (state?: string) => Sent | Promise<Sent>>>;
   causes: Readonly<Record<string, Readonly<Record<string, () => Sent | Promise<Sent>>>>>;
 };
@@ -74,16 +77,19 @@ class Run {
   private readonly callers = new Map<string, Request>();
 
   constructor(
-    readonly module: LooseModule,
+    readonly places: ReadonlyArray<LooseModule>,
+    readonly contract: Contract,
     readonly f: LooseFixtures,
   ) {
-    const all = Object.values(module.contract.commands).flatMap((c) => (isReason(c.capability) ? [] : [c.capability]));
+    const all = Object.values(contract.commands).flatMap((c) => (isReason(c.capability) ? [] : [c.capability]));
 
     this.capabilities = [...new Set(all)];
   }
 
-  get contract() {
-    return this.module.contract;
+  placeOf(command: string): LooseModule | undefined {
+    const full = `${this.contract.name}.${command}`;
+
+    return this.places.find((p) => p.procedures.some((x) => x.name === full));
   }
 
   caller(capabilities: ReadonlyArray<string>): Request {
@@ -117,14 +123,14 @@ class Run {
 
   async observe(calls: () => Promise<Array<CallResult>>): Promise<{ results: Array<CallResult>; events: Array<ContractEvent> }> {
     const events: Array<ContractEvent> = [];
-    const stop = this.module.events.subscribe((e) => void events.push(e));
+    const stops = this.places.map((p) => p.events.subscribe((e) => void events.push(e)));
 
     try {
       const results = await calls();
 
       return { results, events };
     } finally {
-      stop();
+      for (const stop of stops) {stop();}
     }
   }
 
@@ -379,27 +385,88 @@ function causeChecks(run: Run, name: string, cmd: CommandSpec): Array<ContractCh
   }));
 }
 
+function servedChecks(run: Run, name: string): Array<ContractCheck> {
+  const label = `${run.contract.name}.${name}`;
+  const count = run.places.length === 1 ? 'the one place' : `any of the ${run.places.length} places`;
+
+  return [
+    {
+      name: `${label} is served by a place`,
+      run: () => Promise.reject(new Error(`${label}: ${count} given to contractChecks gives a reason instead of a handler. Give one place its handler, or pass the place that serves it.`)),
+    },
+  ];
+}
+
+function deliveryChecks(run: Run, name: string, cmd: CommandSpec): Array<ContractCheck> {
+  const place = run.placeOf(name);
+
+  if (!place?.events.kept || !cmd.emits?.length) {return [];}
+
+  const label = `${run.contract.name}.${name}`;
+  const move = cmd.move === undefined ? undefined : run.contract.states?.moves[cmd.move];
+
+  return [
+    {
+      name: `${label} keeps its events until they're delivered`,
+      run: async () => {
+        const breakDelivery = run.f.breakDelivery;
+
+        if (!breakDelivery) {throw new Error(`${label}: its place has an outbox, so pass breakDelivery to contractChecks to check that a failed delivery is tried again`);}
+
+        await place.events.deliver(run.f.env);
+
+        const fix = breakDelivery();
+        let left = 0;
+
+        try {
+          expectOk(label, await run.call(name, run.send(cmd, await run.goodInput(name, move?.from[0]))));
+          left = await place.events.deliver(run.f.env);
+        } finally {
+          fix();
+        }
+
+        if (!left) {throw new Error(`${label}: a failed delivery left nothing in the outbox. Keep each event until publish takes it.`);}
+
+        const after = await place.events.deliver(run.f.env);
+
+        if (after) {throw new Error(`${label}: ${after} event(s) still wait after delivery works again. deliver() has to try what the outbox holds.`);}
+      },
+    },
+  ];
+}
+
 /**
  * Checks a build of a module against its contract from the outside, through the registry: each command with good and bad input, a
  * caller without the capability, a repeated requestId, each listed move, each unlisted move and each listed failure.
  *
- *   const checks = contractChecks(module).with({ registry, callerWith, arrange, causes });
+ * Pass each place that serves part of the contract, so the whole contract is checked once. A place with an outbox also gets a check
+ * that a failed delivery is kept and tried again.
+ *
+ *   const checks = contractChecks(owner, index).with({ registry, callerWith, arrange, causes });
  *   for (const check of checks) it(check.name, check.run);
  */
-export function contractChecks<C extends ContractSpec>(module: ContractModule<C>): ContractChecker<C>;
-export function contractChecks(module: LooseModule): LooseChecker {
+export function contractChecks<C extends ContractSpec>(place: ContractModule<C>, ...others: Array<ContractModule<C>>): ContractChecker<C>;
+export function contractChecks(place: LooseModule, ...others: Array<LooseModule>): LooseChecker {
+  const contract = place.contract;
+  const places = [place, ...others];
+
+  for (const other of others.filter((o) => o.contract.name !== contract.name)) {
+    throw new Error(`contractChecks got places of "${contract.name}" and "${other.contract.name}": check one contract at a time`);
+  }
+
   return {
     with(fixtures) {
-      const run = new Run(module, fixtures);
+      const run = new Run(places, contract, fixtures);
 
-      return Object.entries(module.contract.commands).flatMap(([name, cmd]) => [
+      return Object.entries(contract.commands).flatMap(([name, cmd]) => run.placeOf(name) ? [
         ...goodChecks(run, name, cmd),
         ...badInputChecks(run, name, cmd),
         ...capabilityChecks(run, name, cmd),
         ...retryChecks(run, name, cmd),
         ...moveChecks(run, name, cmd),
         ...causeChecks(run, name, cmd),
-      ]);
+        ...deliveryChecks(run, name, cmd),
+      ] : servedChecks(run, name));
     },
   };
 }

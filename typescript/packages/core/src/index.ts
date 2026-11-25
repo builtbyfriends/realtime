@@ -93,7 +93,10 @@ export {
   type ContractModule,
   type ContractProcedure,
   type Implementation,
+  type ModuleEvents,
 } from './contract-module.js';
+
+export { memoryOutbox, storageOutbox, type EventOutbox, type KeptEvent, type OutboxStorage, type StorageOutboxOptions } from './outbox.js';
 
 export { memoryRunOnce, storageRunOnce, type RunOnceStorage, type RunOnceStore, type Settled } from './run-once.js';
 

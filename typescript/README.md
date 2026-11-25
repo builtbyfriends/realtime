@@ -236,6 +236,19 @@ for tests and examples. A handler's changes aren't rolled back when one of its e
 500 and keeps nothing, so a retry runs the handler again. `contractChecks` runs each command, so a bad payload tends to show up there
 before it ships.
 
+Without an outbox, an event whose delivery fails is gone. Pass `outbox: storageOutbox(ctx.storage)` and each event is written to the
+owner's SQLite right after the handler, then delivered, and removed once `publish` takes it. When `publish` throws, the event waits,
+the outbox sets the object's alarm, and the owner's `alarm()` calls `module.events.deliver(env)` to try again. Delivery is then at
+least once, so a listener has to cope with the same event twice, such as by keying on the record's id. Delivery stops at the first
+event that fails and tries again later, so order is kept, and an event that can never be delivered holds the ones behind it. The
+place to look is the `_realtime_outbox` table in the owner's SQLite. There's no give-up count for now: that's an assumption, to
+change once a stuck event is seen.
+
+A contract can be served from more than one place, such as each record's owner for writes and a shared index for a list across
+owners. Each place gives a handler for the commands it serves and a reason for the rest: `list: { reason: 'The index serves it' }`.
+Register the procedures of each place, and pass every place to `contractChecks(owner, index)`, which checks the whole contract and
+fails a command that no place serves.
+
 `contractDocs(tasks)` writes one short plain-text page for people and models. `contractChecks(module).with({ registry, callerWith,
 arrange, causes })` lists tests that run from the outside through the registry: each command with good and bad input, a caller
 without the capability, a repeated requestId (one after the other and at the same time), each listed move, each unlisted move and

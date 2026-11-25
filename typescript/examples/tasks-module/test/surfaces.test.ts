@@ -7,11 +7,11 @@ describe('the contract is the one source for each surface', () => {
     expect(registry.manifest().procedures.map((p) => p.cli?.command)).toEqual([
       'tasks create',
       'tasks get',
-      'tasks list',
       'tasks start',
       'tasks finish',
       'tasks reopen',
       'tasks remove',
+      'tasks list',
     ]);
   });
 
@@ -19,10 +19,10 @@ describe('the contract is the one source for each surface', () => {
     expect(anthropicTools(registry).map((t) => t.name)).toEqual([
       'tasks_create',
       'tasks_get',
-      'tasks_list',
       'tasks_start',
       'tasks_finish',
       'tasks_reopen',
+      'tasks_list',
     ]);
     expect([...registry.procedures.values()].flatMap((p) => (p.decisions.aiTool.kind === 'tool' && p.decisions.aiTool.needsApproval ? [p.name] : []))).toEqual(['tasks.reopen']);
   });
