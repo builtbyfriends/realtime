@@ -34,6 +34,15 @@ Native apps that sign in with a bearer token can listen to the same live streams
 
 ## Install
 
+The packages live on GitHub Packages, which asks for a sign-in even to install. Make a classic GitHub token with `read:packages`, put it in `NODE_AUTH_TOKEN`, and add this `.npmrc` next to your `package.json`:
+
+```ini
+@builtbyfriends:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+Then install as usual:
+
 ```sh
 npm install @builtbyfriends/realtime
 ```
