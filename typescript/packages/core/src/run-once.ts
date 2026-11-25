@@ -57,6 +57,10 @@ function settledFrom(text: string): Settled {
  * Keeps request ids in a Durable Object's own SQLite storage, next to the state they guard, so a retry after a restart still gets the
  * first result. Each id is kept with its result as JSON for `keepMs`, then deleted on a later call. Calls that come while the first one
  * runs share it in memory, since one object runs them.
+ *
+ * The id is written right after the handler returns. When the handler doesn't wait on anything outside the object in between, it lands
+ * in the same batch of writes as the handler's own SQLite changes. A handler that waits on an outside call can leave its state written
+ * with no id kept if the object stops at that moment, and a retry then runs it again.
  */
 export function storageRunOnce(storage: RunOnceStorage, now: () => number = Date.now): RunOnceStore {
   const running = new Map<string, Promise<Settled>>();
