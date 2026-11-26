@@ -65,6 +65,16 @@ export type CapabilityQuestion<C extends ContractSpec, Ctx> = {
   [K in CommandName<C>]: { ctx: Ctx; capability: string; command: K; input: ParsedInput<C, K> };
 }[CommandName<C>];
 
+/** What `onDeliveryFailed` is told when `publish` throws for an event. */
+export type DeliveryFailure = {
+  event: ContractEvent;
+  error: unknown;
+  /** How many times this event has failed to go out, counting this one, as this isolate has seen it. It starts again from 1 after a restart. */
+  attempt: number;
+  /** True when an outbox keeps the event and will try again. False without an outbox: the event is gone. */
+  retrying: boolean;
+};
+
 export type Implementation<C extends ContractSpec, Ctx, Env> = {
   /** Who is calling. Every command of a module shares it. */
   auth: AuthProvider<Ctx, Env> | Reason;
@@ -81,6 +91,12 @@ export type Implementation<C extends ContractSpec, Ctx, Env> = {
    * event whose delivery fails is gone. With it, delivery is at least once, so a listener can get the same event twice.
    */
   outbox?: EventOutbox;
+  /**
+   * Called each time `publish` throws for an event, with the event, the error, which attempt it was and whether it will be tried
+   * again. Without it, a failure is logged with `console.warn`. It runs after the next try is asked for, and an error from it is
+   * logged and goes no further, so it can't lose the event.
+   */
+  onDeliveryFailed?: (failure: DeliveryFailure, env: Env) => void | Promise<void>;
   /** A handler for each command this place serves, or a reason for one that another place serves, such as a shared index. */
   commands: { [K in CommandName<C>]: CommandHandler<C, K, Ctx, Env> | Reason };
 };
@@ -136,6 +152,7 @@ type LooseImplementation = {
   publish: ((event: ContractEvent, env: State['env']) => void | Promise<void>) | Reason;
   runOnce?: RunOnceStore;
   outbox?: EventOutbox;
+  onDeliveryFailed?: (failure: DeliveryFailure, env: State['env']) => void | Promise<void>;
   commands: Readonly<Record<string, ((args: LooseArgs) => State['outRaw']) | Reason>>;
 };
 
@@ -273,6 +290,7 @@ async function checkedEvents(contract: Contract, command: string, cmd: CommandSp
 class Built {
   readonly listeners = new Set<EventListener>();
   readonly keepMs: number;
+  private readonly attempts = new Map<string, number>();
   private delivering: Promise<number> | null = null;
   private again = false;
 
@@ -315,7 +333,9 @@ class Built {
     for (const e of events) {
       for (const listener of this.listeners) {args.waitUntil(Promise.resolve().then(() => listener(e)));}
 
-      if (!outbox && !('reason' in publish)) {args.waitUntil(Promise.resolve().then(() => publish(e, args.env)));}
+      if (!outbox && !('reason' in publish)) {
+        args.waitUntil(Promise.resolve().then(() => publish(e, args.env)).catch((error: unknown) => this.reportFailure(e, error, 1, false, args.env)));
+      }
     }
 
     if (outbox && events.length) {args.waitUntil(this.deliver(args.env).then(() => undefined));}
@@ -335,6 +355,20 @@ class Built {
     return this.delivering;
   }
 
+  private async reportFailure(event: ContractEvent, error: unknown, attempt: number, retrying: boolean, env: State['env']): Promise<void> {
+    const hook = this.impl.onDeliveryFailed;
+
+    try {
+      if (hook) {
+        await hook({ event, error, attempt, retrying }, env);
+      } else {
+        console.warn(`[realtime] ${event.event} on ${event.topic} failed to publish (attempt ${attempt}, ${retrying ? 'will try again' : 'not kept'}):`, error);
+      }
+    } catch (hookError) {
+      console.error(`[realtime] onDeliveryFailed threw for ${event.event} on ${event.topic}:`, hookError);
+    }
+  }
+
   private async deliverAll(env: State['env']): Promise<number> {
     const outbox = this.impl.outbox;
     const publish = this.impl.publish;
@@ -347,13 +381,18 @@ class Built {
       for (const kept of outbox.pending()) {
         try {
           await publish(kept.event, env);
-        } catch {
+        } catch (error) {
+          const attempt = (this.attempts.get(kept.id) ?? 0) + 1;
+
+          this.attempts.set(kept.id, attempt);
           await outbox.retryLater();
+          await this.reportFailure(kept.event, error, attempt, true, env);
 
           return outbox.pending().length;
         }
 
         outbox.delivered(kept.id);
+        this.attempts.delete(kept.id);
       }
     } while (this.again);
 

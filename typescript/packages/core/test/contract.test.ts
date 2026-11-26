@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { DatabaseSync } from 'node:sqlite';
 import { contractChecks, contractDocs, defineContract, defineRegistry, implementContract, memoryOutbox, memoryRunOnce, storageOutbox, storageRunOnce } from '@builtbyfriends/realtime';
-import type { CommandArgs, ContractEvent, EventOutbox, OutboxStorage, PropertySettings, RunOnceStorage, RunOnceStore, Settled } from '@builtbyfriends/realtime';
+import type { CommandArgs, ContractEvent, DeliveryFailure, EventOutbox, OutboxStorage, PropertySettings, RunOnceStorage, RunOnceStore, Settled } from '@builtbyfriends/realtime';
 
 const states = ['draft', 'sent'] as const;
 const Note = z.object({ id: z.string(), body: z.string(), state: z.enum(states) });
@@ -404,6 +404,121 @@ function outboxStorage(db = new DatabaseSync(':memory:')): OutboxStorage & { ala
     },
   };
 }
+
+function deliveryWorld(options: { outbox?: EventOutbox; onDeliveryFailed?: (failure: DeliveryFailure) => void | Promise<void> } = {}) {
+  const state = { down: true, delivered: [] as Array<ContractEvent> };
+  const caller = { id: 'c', caps: ['notes.write'] };
+
+  const module = implementContract(notes).with({
+    auth: { name: 'test', resolve: () => caller, actorId: (c: Caller) => c.id },
+    can: () => true,
+    analytics: off,
+    runOnce: memoryRunOnce(),
+    outbox: options.outbox,
+    onDeliveryFailed: options.onDeliveryFailed,
+    publish: (event: ContractEvent) => {
+      if (state.down) {throw new Error('no database binding');}
+
+      state.delivered.push(event);
+    },
+    commands: {
+      write: ({ input, emit }) => {
+        const note: Note = { id: 'n-1', body: input.body, state: 'draft' };
+
+        emit('written', note);
+
+        return note;
+      },
+      send: { reason: 'Not part of this test' },
+    },
+  });
+
+  const registry = defineRegistry(module.procedures);
+
+  const write = async (requestId: string) => {
+    const waits: Array<Promise<unknown>> = [];
+    const result = await registry.call('notes.write', { body: 'Hi', requestId }, { request: new Request('https://x'), env: {}, surface: 'direct', waitUntil: (p) => void waits.push(p) });
+
+    await Promise.all(waits);
+
+    return result;
+  };
+
+  return { module, state, write };
+}
+
+describe('a failed delivery', () => {
+  it('tells the app once, keeps the events, and delivers them on the next try without telling it again', async () => {
+    const failures: Array<DeliveryFailure> = [];
+    const outbox = memoryOutbox();
+    const { module, state, write } = deliveryWorld({ outbox, onDeliveryFailed: (f) => void failures.push(f) });
+
+    expect(await write('r1')).toMatchObject({ ok: true });
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ attempt: 1, retrying: true, event: { event: 'notes.written', topic: 'notes:n-1' } });
+    expect(failures[0]?.error).toEqual(new Error('no database binding'));
+    expect(outbox.pending()).toHaveLength(2);
+
+    state.down = false;
+
+    expect(await module.events.deliver({})).toBe(0);
+    expect(failures).toHaveLength(1);
+    expect(state.delivered.map((e) => e.topic)).toEqual(['notes:n-1', 'notes:draft']);
+  });
+
+  it('counts the attempts for the event that keeps failing', async () => {
+    const attempts: Array<number> = [];
+    const { module, state, write } = deliveryWorld({ outbox: memoryOutbox(), onDeliveryFailed: (f) => void attempts.push(f.attempt) });
+
+    await write('r1');
+    await module.events.deliver({});
+    await module.events.deliver({});
+    state.down = false;
+    await module.events.deliver({});
+    await module.events.deliver({});
+
+    expect(attempts).toEqual([1, 2, 3]);
+  });
+
+  it('keeps the event when the hook throws, and logs that', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const outbox = memoryOutbox();
+    const { module, state, write } = deliveryWorld({ outbox, onDeliveryFailed: () => {throw new Error('the hook broke');} });
+
+    await write('r1');
+
+    expect(outbox.pending()).toHaveLength(2);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('onDeliveryFailed threw for notes.written'), new Error('the hook broke'));
+
+    state.down = false;
+
+    expect(await module.events.deliver({})).toBe(0);
+    expect(state.delivered).toHaveLength(2);
+    error.mockRestore();
+  });
+
+  it('is logged with the event and the error when the app gives no hook', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { write } = deliveryWorld({ outbox: memoryOutbox() });
+
+    await write('r1');
+
+    expect(warn).toHaveBeenCalledWith('[realtime] notes.written on notes:n-1 failed to publish (attempt 1, will try again):', new Error('no database binding'));
+    warn.mockRestore();
+  });
+
+  it('is told to the app without an outbox too, as not kept', async () => {
+    const failures: Array<DeliveryFailure> = [];
+    const { write } = deliveryWorld({ onDeliveryFailed: (f) => void failures.push(f) });
+
+    await write('r1');
+
+    expect(failures.map((f) => [f.event.topic, f.attempt, f.retrying])).toEqual([
+      ['notes:n-1', 1, false],
+      ['notes:draft', 1, false],
+    ]);
+  });
+});
 
 describe('storageOutbox', () => {
   it('keeps events across a restart until each is delivered, and sets an alarm to try again', async () => {

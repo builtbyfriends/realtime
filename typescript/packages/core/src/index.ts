@@ -92,6 +92,7 @@ export {
   type ContractImplementer,
   type ContractModule,
   type ContractProcedure,
+  type DeliveryFailure,
   type Implementation,
   type ModuleEvents,
 } from './contract-module.js';

@@ -1,5 +1,12 @@
 # Changes
 
+## 0.10.1
+
+- A failed event delivery is no longer silent. A module takes an optional `onDeliveryFailed(failure, env)`, called each time `publish` throws for an event. `failure` has the `event`, the `error`, the `attempt` (how many times this event has failed as this isolate has seen it) and `retrying` (true when an outbox keeps the event and will try again). Without the hook, each failure goes to `console.warn` with the event type, its topic and the error. An error thrown by the hook is logged and doesn't lose the event. `DeliveryFailure` is exported.
+- Without an outbox, a `publish` that throws now calls the hook once with `retrying: false`, or warns. Before, the rejection went to the host's `waitUntil` and the event was gone.
+- The README says how retries are spaced and that they don't stop: `storageOutbox` sets the alarm `retryAfterMs` ahead (30 seconds by default) and the wait doesn't grow.
+- A browser run in `bwf/live-e2e` takes the stream down on a real bwf app, sees the app told once, the window unchanged, and the next try deliver the kept events.
+
 ## 0.10.0
 
 - A module's event says who ran the command and what acted for them. `ContractEvent` has two new optional fields, `actor` and `via`.

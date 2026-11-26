@@ -215,6 +215,31 @@ try {
     await context.close();
   });
 
+  await check('a stream that is down tells the app once, keeps the event, and the next try delivers it', async () => {
+    const { context, page } = await freshPage(browser, script);
+    const api = context.request;
+    const state = async () => (await api.get(`${direct}/outage`)).json();
+    await page.evaluate(() => window.harness.mount(['n-9'], true));
+    await until(() => page.evaluate(() => window.harness.titles()['n-9#0'] === 'Note 9'), 'the first fill');
+    await sleep(300);
+    const before = (await state()).failures.length;
+    await api.post(`${direct}/outage`, { data: { on: true } });
+    const answer = await callApi(api, 'notes.rename', { id: 'n-9', title: 'While down', requestId: crypto.randomUUID() });
+    assert.equal(answer.ok, true, 'the command still came back');
+    await sleep(800);
+    const down = await state();
+    output.outage = { failures: down.failures.slice(before), titleWhileDown: await page.evaluate(() => window.harness.titles()['n-9#0']) };
+    assert.equal(down.failures.length - before, 1, 'the app was told once');
+    assert.deepEqual(down.failures.at(-1), { topic: 'notes:n-9', attempt: 1, retrying: true, message: 'the stream is down' });
+    assert.equal(output.outage.titleWhileDown, 'Note 9', 'the window changed while the stream was down');
+    await api.post(`${direct}/outage`, { data: { on: false } });
+    const delivered = await (await api.post(`${direct}/deliver`)).json();
+    assert.equal(delivered.left, 0);
+    await until(() => page.evaluate(() => window.harness.titles()['n-9#0'] === 'While down'), 'the kept event to arrive');
+    assert.equal((await state()).failures.length - before, 1, 'the app was told again');
+    await context.close();
+  });
+
   await check('a drop and a reconnect load again and leave the newest record', async () => {
     const { context, page, seen } = await freshPage(browser, script);
     await page.evaluate(() => window.harness.mount(['n-7'], true));
