@@ -258,7 +258,8 @@ each listed failure. [`examples/tasks-module`](examples/tasks-module/GUIDE.md) i
 few records in random states and sends a random string of moves, other writes and repeats of earlier requests. A listed move has to
 land in its state, an unlisted one has to be refused, and a repeated `requestId` has to get the first answer and publish nothing. A
 failure shrinks to the fewest steps and prints a seed and a path: pass them back as `properties: { seed, path }` to run that case
-again. The runs send one record's input to each of its move commands, so those need to take the same input, such as `{ id }`. A
+again. The runs send one record's input to each of its move commands, so those need to take the same input, such as `{ id }`. They
+repeat only requests that succeeded, since a failed command keeps nothing with its `requestId` and a retry runs it again. A
 module adds its own properties, with `@fast-check/vitest`, only for what the contract can't say.
 
 ## Data and live queries

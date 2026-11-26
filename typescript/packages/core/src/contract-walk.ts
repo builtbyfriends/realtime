@@ -125,6 +125,7 @@ class WriteStep implements Step {
     const input = this.w.send(cmd, await this.w.goodInput(this.command));
     const { result } = await this.w.once(this.command, input);
 
+    // Decision: a failed write is left alone here. The good-input check already fails it, and these runs only need its success to repeat.
     if (result.ok) {m.done.push({ command: this.command, input, result });}
   }
 
