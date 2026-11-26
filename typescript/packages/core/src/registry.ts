@@ -99,7 +99,10 @@ export type ManifestEntry = {
 };
 export type Manifest = { version: 1; procedures: Array<ManifestEntry> };
 
-type ProcMap<P extends ReadonlyArray<AnyProcedure>> = { [K in P[number] as K['name']]: K };
+// Decision: a procedure whose name is any string adds no key, so a registry of no particular procedures has an empty map, not a
+// string index. An app's procedure map can then be an interface, which bwf's codegen writes and apps extend, since an interface
+// has no index signature.
+type ProcMap<P extends ReadonlyArray<AnyProcedure>> = { [K in P[number] as string extends K['name'] ? never : K['name']]: K };
 
 export interface Registry<P extends ReadonlyArray<AnyProcedure> = ReadonlyArray<AnyProcedure>> {
   readonly procedures: ReadonlyMap<string, LoadedProcedure>;

@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "build": "tsc -b && cp packages/bwf/src/devtools.html packages/bwf/dist/",
-    "typecheck": "tsc -b && tsc -p packages/core/type-tests/tsconfig.json && tsc -p packages/core/type-tests/tsconfig.perf.json && tsc -p packages/data/type-tests/tsconfig.json && tsc -p packages/data/type-tests/tsconfig.upgrade.json && tsc -p examples/contacts-worker/tsconfig.json && tsc -p examples/chat-worker/tsconfig.json && tsc -p examples/tasks-module/tsconfig.json",
+    "typecheck": "tsc -b && tsc -p packages/core/type-tests/tsconfig.json && tsc -p packages/core/type-tests/tsconfig.perf.json && tsc -p packages/bwf/type-tests/tsconfig.json && tsc -p packages/data/type-tests/tsconfig.json && tsc -p packages/data/type-tests/tsconfig.upgrade.json && tsc -p examples/contacts-worker/tsconfig.json && tsc -p examples/chat-worker/tsconfig.json && tsc -p examples/tasks-module/tsconfig.json",
     "test": "vitest run",
     "test:types": "node scripts/type-errors.mjs",
     "lint": "cd ../lint && bun install --frozen-lockfile && cd .. && PATH=$PWD/lint/node_modules/.bin:$PATH oxlint -c lint/oxlint.config.ts typescript && PATH=$PWD/lint/node_modules/.bin:$PATH oxlint -c lint/oxlint.demos.config.ts bwf",

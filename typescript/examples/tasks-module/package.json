@@ -8,10 +8,10 @@
     "deploy": "tsc --noEmit && wrangler deploy"
   },
   "dependencies": {
-    "@builtbyfriends/realtime": "0.8.0",
-    "@builtbyfriends/realtime-ai": "0.8.0",
-    "@builtbyfriends/realtime-http": "0.8.0",
-    "@builtbyfriends/realtime-mcp": "0.8.0",
+    "@builtbyfriends/realtime": "0.8.1",
+    "@builtbyfriends/realtime-ai": "0.8.1",
+    "@builtbyfriends/realtime-http": "0.8.1",
+    "@builtbyfriends/realtime-mcp": "0.8.1",
     "agents": "0.34.0",
     "@modelcontextprotocol/server": "2.4.0",
     "zod": "4.6.7"

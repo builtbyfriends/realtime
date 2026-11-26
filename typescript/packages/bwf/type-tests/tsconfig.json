@@ -1,0 +1,18 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noUnusedLocals": false,
+    "jsx": "react-jsx",
+    "paths": {
+      "@builtbyfriends/realtime": ["../../core/src/index.ts"],
+      "@builtbyfriends/realtime-http/client": ["../../http/src/client.ts"],
+      "@builtbyfriends/realtime-live": ["../../live/src/index.ts"],
+      "@builtbyfriends/realtime-live/react": ["../../live/src/react.ts"]
+    }
+  },
+  "include": ["procedure-map.ts"]
+}
