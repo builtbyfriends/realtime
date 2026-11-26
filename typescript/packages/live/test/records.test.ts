@@ -2,9 +2,10 @@ import { createLiveQueryCollection, eq } from '@tanstack/db';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import type { ContractEvent } from '@builtbyfriends/realtime';
-import { createRuntime } from '../src/records.js';
+import { createRuntime, defineRecords } from '../src/records.js';
+import type { EventTransport } from '../src/records.js';
 import type { NoteRecord } from './fixtures/notes.js';
-import { noteRecords, notesWorld } from './fixtures/notes.js';
+import { notes, noteRecords, notesWorld } from './fixtures/notes.js';
 
 const settle = () => new Promise((r) => setTimeout(r, 10));
 
@@ -239,6 +240,34 @@ describe('a record shared by a list and a single view', () => {
       ),
       { numRuns: 80 },
     );
+  });
+});
+
+describe('subscriptions', () => {
+  it('opens one subscription for a topic that a record with three events and a view all follow, and drops it with the last listener', async () => {
+    const world = notesWorld();
+    world.store.add('n-1', 'b-1', 'First');
+    const calls: Array<string> = [];
+    const transport: EventTransport = { ...world.backend.transport, subscribe: (topic, cb) => (calls.push(topic), world.backend.transport.subscribe(topic, cb)) };
+
+    const definition = defineRecords(notes, {
+      records: { Note: { key: 'id', version: 'updatedAt', reads: { get: { id: 'id' } }, upserts: ['renamed', 'pinned'], removes: ['removed'] } },
+      views: { can: { events: ['renamed'] } },
+    });
+
+    const runtime = createRuntime(definition, { client: world.backend.client, transport });
+    const one = createLiveQueryCollection({ query: (q) => q.from({ n: runtime.collections.Note }).where(({ n }) => eq(n.id, 'n-1')) });
+    await one.preload();
+    const stop = runtime.views.can({ id: 'n-1' }).subscribe(() => {});
+    await settle();
+    expect(calls).toEqual(['notes:n-1']);
+    expect(world.backend.listenerCount('notes:n-1')).toBe(1);
+    expect(world.backend.listenerCount()).toBe(2);
+    stop();
+    expect(world.backend.listenerCount('notes:n-1')).toBe(1);
+    await one.cleanup();
+    await settle();
+    expect(world.backend.listenerCount()).toBe(0);
   });
 });
 

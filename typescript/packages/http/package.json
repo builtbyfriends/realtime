@@ -1,6 +1,6 @@
 {
   "name": "@builtbyfriends/realtime-http",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Fetch handler, OpenAPI and typed client for an realtime registry",
   "type": "module",
   "sideEffects": false,
@@ -20,7 +20,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@builtbyfriends/realtime": "0.9.0"
+    "@builtbyfriends/realtime": "0.9.1"
   },
   "repository": {
     "type": "git",

@@ -68,6 +68,7 @@ export const notes = defineContract({
   },
   events: {
     renamed: { description: 'A note got a new title.', topic: topics, payload: Note },
+    pinned: { description: 'A note was pinned.', topic: topics, payload: Note },
     boardRenamed: { description: 'A board got a new name.', topic: 'boards:{id}', payload: Board },
     removed: { description: 'A note was deleted.', topic: topics, payload: z.object({ id: z.string(), boardId: z.string() }) },
   },

@@ -1,5 +1,9 @@
 # Changes
 
+## 0.9.1
+
+- Live records keep one subscription for each topic. Before, a record with three events and a view on the same topic opened four, and with a transport that opens a stream for each subscription a browser ran out of its six connections to a host, so commands waited behind them. Every collection and view of one transport now shares one subscription for each topic and one reconnect listener, and the subscription ends when the last listener goes. A test counts them. bwf's transport already shared one subscription for each topic.
+
 ## 0.9.0
 
 - `@builtbyfriends/realtime-live` has a new `records` part: one typed copy of each record in a window, loaded and kept live from a contract, with commands that show their change at once, roll back on a failure, and run once when retried. It's built on TanStack DB, pinned at `1.0.0-rc.1.5`. Read `packages/live/GUIDE.md`.

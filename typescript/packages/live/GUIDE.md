@@ -56,6 +56,7 @@ The list and the single view hold the same record. Rename it and both change in 
 ## How it works
 
 - **One collection per record type.** It holds each record once, by `key`. It loads on demand: a query for `boardId = 'b-1'` calls the read that matches, and listens to the topics that read's input fills in. When the last query for it goes away, it stops listening.
+- **One subscription for each topic.** Collections and views that follow the same topic share one subscription, and it ends when the last of them lets go. A feature never counts them.
 - **Events carry the record.** The window applies the payload, checked against the contract. It listens to the topics of the events you list, filled from the read's input. A topic is used when all of its fields are in that input.
 - **Newer wins.** A record replaces one with a smaller `version`. With an equal version it replaces the old one when the row differs, because a lost change is worse than a repeated one. A removed record needs a strictly newer version to come back. A contract whose version is a counter (1, 2, 3) has no ties, so prefer one when a record can change twice in the same millisecond. With ties, a stale repeat of an older tied row can win again; the counter avoids that too.
 - **A reconnect loads again.** Every watched read runs again. A read also drops the records it listed last time and no longer lists, and a single read that answers `NOT_FOUND` drops its record. This holds when a screen was gone while the record was removed: what each read loaded is kept until the collection is cleaned up, so the next load can compare. A record that another watched read still lists stays.
@@ -108,6 +109,7 @@ Where it had already moved, for the next bump:
 - An optimistic change on a record that isn't loaded fails inside TanStack DB. Guard it with `Note.has(id)`, as above.
 - The versions seen, the keys each read loaded and each view handle are kept in memory and only cleared when the collection is cleaned up. For a window with a few thousand records that's small. Clear them per subset when that stops being true.
 - A removed record's version is gone once the collection is cleaned up.
+- When a subscribe call fails, the listeners of that topic stay with nothing feeding them until something else subscribes to the topic or a reconnect loads again. The error is logged. If this shows up in real use, the fix is to subscribe again on reconnect.
 
 ## Assumptions for later
 
