@@ -78,8 +78,8 @@ async function until(fn, what, ms = 8000) {
   throw new Error(`timed out waiting for ${what}; last: ${String(last)}`);
 }
 
-async function callApi(request, name, input) {
-  const res = await request.post(`${direct}/call`, { headers: auth, data: { name, input } });
+async function callApi(request, name, input, token = 'ok') {
+  const res = await request.post(`${direct}/call`, { headers: { ...auth, authorization: `Bearer ${token}` }, data: { name, input } });
 
   return res.json();
 }
@@ -193,6 +193,25 @@ try {
     assert.equal(answer.ok, true, JSON.stringify(answer));
     await until(() => page.evaluate(() => window.harness.titles()['n-5#1'] === 'From elsewhere'), 'the event to arrive');
     assert.equal(seen.calls, calls, 'the window loaded again instead of using the event');
+    await context.close();
+  });
+
+  await check('an event says who ran the command and what acted for them', async () => {
+    const { context, page } = await freshPage(browser, script);
+    await page.evaluate(() => window.harness.mount(['n-8'], true));
+    await until(() => page.evaluate(() => window.harness.titles()['n-8#0'] === 'Note 8'), 'the first fill');
+    await sleep(300);
+    const lastEvent = () => page.evaluate(() => window.harness.events.at(-1));
+    await callApi(context.request, 'notes.rename', { id: 'n-8', title: 'By a person', requestId: crypto.randomUUID() });
+    await until(() => page.evaluate(() => window.harness.titles()['n-8#0'] === 'By a person'), 'the person\'s event');
+    const person = await lastEvent();
+    await callApi(context.request, 'notes.rename', { id: 'n-8', title: 'By a thread', requestId: crypto.randomUUID() }, 'ok:thread');
+    await until(() => page.evaluate(() => window.harness.titles()['n-8#0'] === 'By a thread'), 'the thread\'s event');
+    const thread = await lastEvent();
+    output.who = { person: { actor: person.actor, via: person.via, hasVia: 'via' in person }, thread: { actor: thread.actor, via: thread.via } };
+    assert.equal(person.actor, 'u-1');
+    assert.equal('via' in person, false, 'a person\'s tap carries no via');
+    assert.deepEqual({ actor: thread.actor, via: thread.via }, { actor: 'u-1', via: 'thread-1' });
     await context.close();
   });
 

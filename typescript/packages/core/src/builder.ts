@@ -17,6 +17,11 @@ export interface AuthProvider<Ctx = unknown, Env = unknown> {
   resolve(request: Request, env: Env): Promise<Ctx | null | undefined> | Ctx | null | undefined;
   /** Optional stable id for analytics (never an email). */
   actorId?(ctx: Ctx): string | undefined;
+  /**
+   * Optional label for what acted for the caller, such as a thread that ran a command for a person. A contract's events
+   * carry it as `via`, as plain text. It changes nothing about who may do what: rights stay with the caller.
+   */
+  viaOf?(ctx: Ctx): string | undefined;
 }
 
 export type AnalyticsProps = Record<string, string | number | boolean | null>;

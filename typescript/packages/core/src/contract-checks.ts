@@ -22,6 +22,13 @@ export type ContractFixtures<C extends ContractSpec> = {
   arrange: {
     [K in CommandName<C>]: (state: [MoveOf<C, K>] extends [never] ? undefined : StateOf<C>) => GoodInput<C, K> | Promise<GoodInput<C, K>>;
   };
+  /**
+   * Who the callers from `callerWith` are, as their sign-in names them: the id its `actorId` gives and, when it names one,
+   * what its `viaOf` gives. With it, each event a command emits has to say the same: an event from a named caller carries
+   * that caller's `actor`, and an event from an unnamed one carries none. `via` follows the same way. A field you leave out
+   * isn't checked, and `undefined` says the callers carry none.
+   */
+  callerLabels?: { actor?: string | undefined; via?: string | undefined };
   /** Makes `publish` throw until the function it gives back is called. The delivery check needs it when a place has an outbox. */
   breakDelivery?: () => () => void;
   /** How many random runs of commands to try, and the `seed` and `path` of a failure to run again. */
@@ -45,6 +52,7 @@ type LooseFixtures = {
   registry: Registry;
   env?: unknown;
   callerWith: (capabilities: ReadonlyArray<string>) => Request;
+  callerLabels?: { actor?: string | undefined; via?: string | undefined };
   breakDelivery?: () => () => void;
   properties?: PropertySettings;
   arrange: Readonly<Record<string, (state?: string) => Sent | Promise<Sent>>>;
@@ -118,6 +126,26 @@ class Run {
       if (!sent.length) {throw new Error(`${label}: succeeded without emitting "${e}", which it lists in emits. Emit it, or take it out of emits.`);}
 
       this.expectTopics(label, e, sent);
+      this.expectWho(label, e, sent);
+    }
+  }
+
+  expectWho(label: string, event: string, sent: ReadonlyArray<ContractEvent>): void {
+    const expected = this.f.callerLabels;
+
+    if (!expected) {return;}
+
+    for (const field of ['actor', 'via'] as const) {
+      if (!(field in expected)) {continue;}
+
+      for (const x of sent) {
+        if (x[field] !== expected[field]) {
+          const want = expected[field] === undefined ? `no ${field}` : `${field} "${expected[field]}"`;
+          const got = x[field] === undefined ? `no ${field}` : `${field} "${x[field]}"`;
+
+          throw new Error(`${label}: emitted "${event}" with ${got}, and the caller's sign-in gives ${want}. Events say who ran the command and what acted for them, from the auth provider's actorId and viaOf.`);
+        }
+      }
     }
   }
 

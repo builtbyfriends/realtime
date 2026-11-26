@@ -42,6 +42,8 @@ notes.send (write)
 
 ## Events
 
+Each event also says who ran the command (\`actor\`, when the sign-in names them) and what acted for them (\`via\`, when the sign-in names one). Both go to everyone who reads the topic.
+
 notes.written on notes:{id} and notes:{state}
   A note was written.
   Payload: Note

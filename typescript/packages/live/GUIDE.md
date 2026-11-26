@@ -74,6 +74,14 @@ A read that depends on who's asking sits beside the record as a view, because it
 
 A view listens only while a component uses it. If a change can't be seen from either an event or a command of this window, the answer can be stale until the next one of those. A screen that needs it sooner calls `refresh()` on the handle (`runtime.views.can(input).refresh()`).
 
+## Who acted
+
+A module's event can say who ran the command (`actor`) and what acted for them (`via`, such as a thread that ran it for a person). The sign-in gives both, with `actorId` and `viaOf` on its auth provider, and Realtime treats them as plain text: rights stay with the caller.
+
+Both labels go to each reader of the topic, so a sign-in shouldn't put anything private in them. `actor` is missing when the sign-in names no one, and on events an outbox kept before 0.10.0. `via` is missing when it names nothing.
+
+bwf's transport passes the whole event on, but a feature can't see it yet. Live records read the payload, check it and keep the record, and no hook hands the checked event to a screen. When a screen needs to tell a person's tap from a thread's act, the first step is an optional `onEvent` in the options of the provider and `createRuntime`, called with the whole event after it passed the contract check.
+
 ## Tests and the dev page
 
 `fakeBackend` from `@builtbyfriends/realtime-live/records/testing` runs a real module in the same process. Give it the registry and the module, and use its `client` and `transport` in the provider. Commands go through the module's own auth, schema checks, handlers and request id store, so a feature's test needs no backend. `deliver(event)` sends an event by hand, `reconnect()` simulates a drop, and `listenerCount()` shows what's still listening.

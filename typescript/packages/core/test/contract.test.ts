@@ -53,9 +53,11 @@ type Mistakes = {
   forgetPlace?: boolean;
   outbox?: EventOutbox;
   noBreakDelivery?: boolean;
+  dropVia?: boolean;
+  claimUnnamed?: boolean;
 };
 
-type Caller = { id: string; caps: ReadonlyArray<string> };
+type Caller = { id: string; caps: ReadonlyArray<string>; via?: string };
 
 function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce(), properties?: PropertySettings) {
   const store = new Map<string, Note>();
@@ -74,7 +76,7 @@ function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce(),
   let broken = false;
 
   const ports = {
-    auth: { name: 'test', resolve: (request: Request) => callers.get(request.headers.get('x-caller') ?? '') ?? null, actorId: (c: Caller) => c.id },
+    auth: { name: 'test', resolve: (request: Request) => callers.get(request.headers.get('x-caller') ?? '') ?? null, actorId: (c: Caller) => c.id, viaOf: (c: Caller) => (mistakes.dropVia ? undefined : c.via) },
     can: ({ ctx, capability }: { ctx: Caller; capability: string }) => mistakes.ignoreCapability === true || ctx.caps.includes(capability),
     analytics: off,
     runOnce,
@@ -126,9 +128,12 @@ function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce(),
 
   const others = mistakes.split && !mistakes.forgetPlace ? [sender] : [];
 
+  const labels = mistakes.claimUnnamed ? { via: 'thread-1', actor: undefined } : { via: 'thread-1' };
+
   const checks = contractChecks(observed, ...others).with({
     registry,
     properties,
+    callerLabels: labels,
     breakDelivery: mistakes.noBreakDelivery
       ? undefined
       : () => {
@@ -140,7 +145,7 @@ function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce(),
         },
     callerWith: (caps) => {
       const id = `c-${callers.size + 1}`;
-      callers.set(id, { id, caps });
+      callers.set(id, { id, caps, via: 'thread-1' });
 
       return new Request('https://notes.test/rpc', { headers: { 'x-caller': id } });
     },
@@ -281,9 +286,57 @@ describe('implementContract', () => {
     await Promise.all(waits);
     const payload = { id: 'n-1', body: 'Hi', state: 'draft' };
     expect(seen).toEqual([
-      { module: 'notes', name: 'written', event: 'notes.written', topic: 'notes:n-1', payload },
-      { module: 'notes', name: 'written', event: 'notes.written', topic: 'notes:draft', payload },
+      { module: 'notes', name: 'written', event: 'notes.written', topic: 'notes:n-1', payload, actor: 'c' },
+      { module: 'notes', name: 'written', event: 'notes.written', topic: 'notes:draft', payload, actor: 'c' },
     ]);
+  });
+
+  it('says who ran the command and what acted for them, and leaves out what the sign-in does not name', async () => {
+    const { module, callers } = build();
+    const registry = defineRegistry(module.procedures);
+    const seen: Array<ContractEvent> = [];
+    module.events.subscribe((e) => seen.push(e));
+    callers.set('by-thread', { id: 'u-1', caps: ['notes.write'], via: 'thread-9' });
+    callers.set('unnamed', { id: '', caps: ['notes.write'] });
+
+    const waits: Array<Promise<unknown>> = [];
+
+    const send = (who: string, requestId: string) =>
+      registry.call('notes.write', { body: 'Hi', requestId }, { request: new Request('https://x', { headers: { 'x-caller': who } }), env: {}, surface: 'direct', waitUntil: (p) => void waits.push(p) });
+    await send('by-thread', 'r1');
+
+    await send('unnamed', 'r2');
+    await Promise.all(waits);
+
+    expect(seen.map(({ actor, via }) => ({ actor, via }))).toEqual([
+      { actor: 'u-1', via: 'thread-9' },
+      { actor: 'u-1', via: 'thread-9' },
+      { actor: undefined, via: undefined },
+      { actor: undefined, via: undefined },
+    ]);
+    expect(seen.slice(2).every((e) => !('actor' in e) && !('via' in e))).toBe(true);
+  });
+
+  it('fails the command, before its handler runs and with no event, when a provider throws while naming who acted', async () => {
+    const { module, callers } = build();
+    const registry = defineRegistry(module.procedures);
+    const seen: Array<ContractEvent> = [];
+    module.events.subscribe((e) => seen.push(e));
+    callers.set('bad', { id: 'c', caps: ['notes.write'], get via(): string {throw new Error('no label today');} });
+    callers.set('good', { id: 'c', caps: ['notes.write'], via: 'thread-1' });
+    const waits: Array<Promise<unknown>> = [];
+    const send = (who: string, requestId: string) =>
+      registry.call('notes.write', { body: 'Hi', requestId }, { request: new Request('https://x', { headers: { 'x-caller': who } }), env: {}, surface: 'direct', waitUntil: (p) => void waits.push(p) });
+
+    expect(await send('bad', 'r1')).toMatchObject({ ok: false, status: 500, code: 'INTERNAL' });
+    await Promise.all(waits);
+
+    expect(seen).toEqual([]);
+
+    const next = await send('good', 'r2');
+    await Promise.all(waits);
+
+    expect(next).toMatchObject({ ok: true, value: { id: 'n-1' } });
   });
 });
 
@@ -378,6 +431,14 @@ describe('storageOutbox', () => {
 describe('contractChecks', () => {
   it('passes a build that keeps the contract', async () => {
     expect(await failures({})).toEqual([]);
+  });
+
+  it('fails when an event leaves out what acted for the caller, or names a caller the sign-in does not', async () => {
+    const left = await failures({ dropVia: true });
+    expect(left.length).toBeGreaterThan(0);
+    expect(left[0]).toMatch(/emitted "written" with no via, and the caller's sign-in gives via "thread-1"/);
+    const named = await failures({ claimUnnamed: true });
+    expect(named[0]).toMatch(/emitted "written" with actor "c-\d+", and the caller's sign-in gives no actor/);
   });
 
   it('checks a contract served from two places once, across both', async () => {

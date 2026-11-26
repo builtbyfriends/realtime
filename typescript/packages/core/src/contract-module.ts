@@ -23,7 +23,17 @@ import type { InferIn } from './schema.js';
 import { validate } from './schema.js';
 
 /** One event a module published. `event` is "<module>.<name>", and `topic` is one of the contract's topics filled from the payload. An event with several topics is published once on each. */
-export type ContractEvent = { module: string; name: string; event: string; topic: string; payload: unknown };
+export type ContractEvent = {
+  module: string;
+  name: string;
+  event: string;
+  topic: string;
+  payload: unknown;
+  /** Who ran the command, when the sign-in names them. Left out otherwise, and on events kept before this field existed. */
+  actor?: string;
+  /** What acted for the caller, when the sign-in names one. Plain text. Rights stay with the caller. */
+  via?: string;
+};
 
 type Ctx0 = null;
 
@@ -237,7 +247,9 @@ function moveFor(states: StatesSpec | undefined, move: string | undefined, fail:
   };
 }
 
-async function checkedEvents(contract: Contract, command: string, cmd: CommandSpec, pending: Pending): Promise<Array<ContractEvent>> {
+type Who = { actor?: string; via?: string };
+
+async function checkedEvents(contract: Contract, command: string, cmd: CommandSpec, pending: Pending, who: Who): Promise<Array<ContractEvent>> {
   const spec = Object.hasOwn(contract.events, pending.name) ? contract.events[pending.name] : undefined;
   const listed = cmd.emits ?? [];
 
@@ -255,7 +267,7 @@ async function checkedEvents(contract: Contract, command: string, cmd: CommandSp
 
   const event = `${contract.name}.${pending.name}`;
 
-  return topicsOf(spec).map((topic) => ({ module: contract.name, name: pending.name, event, topic: fillTopic(topic, r.value), payload: r.value }));
+  return topicsOf(spec).map((topic) => ({ module: contract.name, name: pending.name, event, topic: fillTopic(topic, r.value), payload: r.value, ...who }));
 }
 
 class Built {
@@ -277,8 +289,24 @@ class Built {
     return 'reason' in auth ? 'anyone' : (auth.actorId?.(ctx) ?? 'anyone');
   }
 
-  async publishAll(name: string, cmd: CommandSpec, pending: Array<Pending>, args: HandlerArgs<State>): Promise<void> {
-    const events = (await Promise.all(pending.map((p) => checkedEvents(this.contract, name, cmd, p)))).flat();
+  whoActed(ctx: State['ctx']): Who {
+    const auth = this.impl.auth;
+
+    if ('reason' in auth) {return {};}
+
+    const who: Who = {};
+    const actor = auth.actorId?.(ctx);
+    const via = auth.viaOf?.(ctx);
+
+    if (actor) {who.actor = actor;}
+
+    if (via) {who.via = via;}
+
+    return who;
+  }
+
+  async publishAll(name: string, cmd: CommandSpec, pending: Array<Pending>, args: HandlerArgs<State>, who: Who): Promise<void> {
+    const events = (await Promise.all(pending.map((p) => checkedEvents(this.contract, name, cmd, p, who)))).flat();
     const publish = this.impl.publish;
     const outbox = this.impl.outbox;
 
@@ -334,6 +362,8 @@ class Built {
 
   async run(name: string, cmd: CommandSpec, args: HandlerArgs<State>, input: State['in']): Promise<Settled> {
     const pending: Array<Pending> = [];
+    // Decision: the labels are read before the handler runs, so a provider that throws fails the command before it changes anything. An event that went out without `via` would read as a person's tap.
+    const who = this.whoActed(args.ctx);
     const handle = this.impl.commands[name];
 
     if (!handle || 'reason' in handle) {throw new Error(`commands.${name} is served elsewhere (${handle?.reason ?? 'no handler'})`);}
@@ -350,7 +380,7 @@ class Built {
       move: moveFor(this.contract.states, cmd.move, args.fail),
     });
 
-    await this.publishAll(name, cmd, pending, args);
+    await this.publishAll(name, cmd, pending, args, who);
 
     return { value };
   }
