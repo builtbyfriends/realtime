@@ -123,10 +123,12 @@ describe('bwfTransport', () => {
     const sent = { module: 'notes', name: 'renamed', event: 'notes.renamed', topic: 'x', payload: { id: 'n-1' } };
     v.deliver('x', { subscriptionId: 'x', topic: 'x', type: 'renamed', data: sent });
     v.deliver('x', { subscriptionId: 'x', topic: 'x', type: 'renamed', data: { id: 'n-2' } });
+    v.deliver('x', { subscriptionId: 'x', topic: 'x', type: 'renamed', data: { payload: 'text' } });
     v.deliver('x', { subscriptionId: 'x', topic: 'x', type: 'changed', data: null });
     expect(got.mock.calls.map(([event]) => event)).toEqual([
       sent,
       { name: 'renamed', topic: 'x', payload: { id: 'n-2' } },
+      { name: 'renamed', topic: 'x', payload: { payload: 'text' } },
       { subscriptionId: 'x', topic: 'x', type: 'changed', data: null },
     ]);
   });

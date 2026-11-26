@@ -29,6 +29,15 @@ function isEnvelope(event: unknown): event is Envelope {
   return typeof event === 'object' && event !== null && 'subscriptionId' in event && 'data' in event;
 }
 
+function isPublished(data: unknown): boolean {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'payload' in data &&
+    (('name' in data && typeof data.name === 'string') || ('event' in data && typeof data.event === 'string'))
+  );
+}
+
 // Decision: bwf wraps what a module publishes in an envelope ({ subscriptionId, topic, type, data }), and records want
 // what was published: a module event, or, when a publisher sent only the payload, the envelope's type as the event
 // name. Anything that isn't an envelope passes as it is.
@@ -37,9 +46,9 @@ function unwrap(event: unknown): unknown {
 
   const { data, type, topic } = event;
 
-  if (typeof data !== 'object' || data === null) {return event;}
+  if (isPublished(data)) {return data;}
 
-  if ('payload' in data) {return data;}
+  if (typeof data !== 'object' || data === null) {return event;}
 
   return typeof type === 'string' ? { name: type, topic, payload: data } : event;
 }
