@@ -74,26 +74,93 @@ export function topicsFor(contract: ContractSpec, events: ReadonlyArray<string>,
 
 export type Watch = { topic: string; handle: (event: unknown) => void };
 
+type StopEntry = { ready: Promise<void>; stop: (() => void) | undefined };
+
+type Hub = {
+  listeners: Map<string, Set<(event: unknown) => void>>;
+  stops: Map<string, StopEntry>;
+  reconnects: Set<() => void>;
+  stopReconnect: (() => void) | undefined;
+};
+
+const hubs = new WeakMap<EventTransport, Hub>();
+
+function hubOf(transport: EventTransport): Hub {
+  const kept = hubs.get(transport);
+
+  if (kept) {return kept;}
+
+  const hub: Hub = { listeners: new Map(), stops: new Map(), reconnects: new Set(), stopReconnect: undefined };
+  hubs.set(transport, hub);
+
+  return hub;
+}
+
+/**
+ * Listens to topics for as long as someone needs them. All watchers of one transport share one subscription for each
+ * topic and one reconnect listener, so a browser that opens a stream for each subscription opens one for each topic.
+ */
 export function watcher(transport: EventTransport | undefined) {
   return function watch(watches: ReadonlyArray<Watch>, onReconnect: () => void): () => void {
     if (!transport) {return () => {};}
 
-    let live = true;
-    const stops: Array<() => void> = [];
+    const hub = hubOf(transport);
+    const mine: Array<{ topic: string; handle: (event: unknown) => void }> = [];
 
     for (const w of watches) {
-      Promise.resolve(transport.subscribe(w.topic, w.handle)).then(
-        (stop) => (live ? stops.push(stop) : stop()),
-        (error: unknown) => console.error(`live: subscribing to "${w.topic}" failed`, error),
-      );
+      const set = hub.listeners.get(w.topic) ?? new Set();
+      hub.listeners.set(w.topic, set);
+      set.add(w.handle);
+      mine.push(w);
+
+      if (!hub.stops.has(w.topic)) {
+        const entry: StopEntry = { ready: Promise.resolve(), stop: undefined };
+        entry.ready = Promise.resolve(
+          transport.subscribe(w.topic, (event) => {
+            for (const listener of hub.listeners.get(w.topic) ?? []) {listener(event);}
+          }),
+        ).then(
+          (stop) => {
+            entry.stop = stop;
+          },
+          (error: unknown) => {
+            console.error(`live: subscribing to "${w.topic}" failed`, error);
+            hub.stops.delete(w.topic);
+          },
+        );
+        hub.stops.set(w.topic, entry);
+      }
     }
 
-    stops.push(transport.onReconnect(onReconnect));
+    hub.reconnects.add(onReconnect);
+    hub.stopReconnect ??= transport.onReconnect(() => {
+      for (const callback of hub.reconnects) {callback();}
+    });
 
     return () => {
-      live = false;
+      for (const w of mine) {
+        const set = hub.listeners.get(w.topic);
+        set?.delete(w.handle);
 
-      for (const stop of stops.splice(0)) {stop();}
+        if (set?.size === 0) {
+          hub.listeners.delete(w.topic);
+          const entry = hub.stops.get(w.topic);
+          hub.stops.delete(w.topic);
+
+          if (entry?.stop) {
+            entry.stop();
+          } else {
+            void entry?.ready.then(() => entry.stop?.());
+          }
+        }
+      }
+
+      hub.reconnects.delete(onReconnect);
+
+      if (hub.reconnects.size === 0) {
+        hub.stopReconnect?.();
+        hub.stopReconnect = undefined;
+      }
     };
   };
 }
