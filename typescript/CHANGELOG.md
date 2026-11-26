@@ -5,7 +5,7 @@
 - A module's event says who ran the command and what acted for them. `ContractEvent` has two new optional fields, `actor` and `via`.
   - `actor` is the id the auth provider's `actorId` gives for the caller. It's left out when the sign-in names no one, and it's missing on events an outbox kept before this release.
   - `via` is a plain label for what acted for the caller, such as a thread that ran a command for a person. An auth provider gives it with the new optional `viaOf(ctx)`, and `bearerAuth` takes it as an option. `anyOf` asks the provider that resolved the caller, as it does for `actorId`. Realtime doesn't read it, compare it or use it for rights: those stay with the caller. It's left out when the sign-in names nothing.
-  - A provider that throws while naming either doesn't fail the command; the event goes out without that label.
+  - A provider that throws while naming either fails the command before its handler runs, so no event goes out without a label it should have carried.
   - The run-once key is unchanged: the caller and the request id, without `via`.
   - Both labels go to everyone who reads the topic, so a sign-in shouldn't put anything private in them.
 - `contractChecks` takes `callerLabels` in its fixtures. With it, an event from a named caller has to carry that caller's `actor`, an event from an unnamed one carries none, and `via` follows the same way.

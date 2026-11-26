@@ -294,18 +294,9 @@ class Built {
 
     if ('reason' in auth) {return {};}
 
-    // Decision: both labels are for readers of an event, so a provider that throws doesn't fail the command, as with the actor id in traces.
-    const label = (read: ((ctx: State['ctx']) => string | undefined) | undefined) => {
-      try {
-        return read?.(ctx) || undefined;
-      } catch {
-        return undefined;
-      }
-    };
-
     const who: Who = {};
-    const actor = label(auth.actorId?.bind(auth));
-    const via = label(auth.viaOf?.bind(auth));
+    const actor = auth.actorId?.(ctx);
+    const via = auth.viaOf?.(ctx);
 
     if (actor) {who.actor = actor;}
 
@@ -314,8 +305,7 @@ class Built {
     return who;
   }
 
-  async publishAll(name: string, cmd: CommandSpec, pending: Array<Pending>, args: HandlerArgs<State>): Promise<void> {
-    const who = this.whoActed(args.ctx);
+  async publishAll(name: string, cmd: CommandSpec, pending: Array<Pending>, args: HandlerArgs<State>, who: Who): Promise<void> {
     const events = (await Promise.all(pending.map((p) => checkedEvents(this.contract, name, cmd, p, who)))).flat();
     const publish = this.impl.publish;
     const outbox = this.impl.outbox;
@@ -372,6 +362,8 @@ class Built {
 
   async run(name: string, cmd: CommandSpec, args: HandlerArgs<State>, input: State['in']): Promise<Settled> {
     const pending: Array<Pending> = [];
+    // Decision: the labels are read before the handler runs, so a provider that throws fails the command before it changes anything. An event that went out without `via` would read as a person's tap.
+    const who = this.whoActed(args.ctx);
     const handle = this.impl.commands[name];
 
     if (!handle || 'reason' in handle) {throw new Error(`commands.${name} is served elsewhere (${handle?.reason ?? 'no handler'})`);}
@@ -388,7 +380,7 @@ class Built {
       move: moveFor(this.contract.states, cmd.move, args.fail),
     });
 
-    await this.publishAll(name, cmd, pending, args);
+    await this.publishAll(name, cmd, pending, args, who);
 
     return { value };
   }

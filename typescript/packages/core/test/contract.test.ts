@@ -317,17 +317,26 @@ describe('implementContract', () => {
     expect(seen.slice(2).every((e) => !('actor' in e) && !('via' in e))).toBe(true);
   });
 
-  it('does not fail a command when a provider throws while naming who acted', async () => {
+  it('fails the command, before its handler runs and with no event, when a provider throws while naming who acted', async () => {
     const { module, callers } = build();
     const registry = defineRegistry(module.procedures);
     const seen: Array<ContractEvent> = [];
     module.events.subscribe((e) => seen.push(e));
-    callers.set('c', { id: 'c', caps: ['notes.write'], get via(): string {throw new Error('no label today');} });
+    callers.set('bad', { id: 'c', caps: ['notes.write'], get via(): string {throw new Error('no label today');} });
+    callers.set('good', { id: 'c', caps: ['notes.write'], via: 'thread-1' });
     const waits: Array<Promise<unknown>> = [];
-    const result = await registry.call('notes.write', { body: 'Hi', requestId: 'r1' }, { request: new Request('https://x', { headers: { 'x-caller': 'c' } }), env: {}, surface: 'direct', waitUntil: (p) => void waits.push(p) });
+    const send = (who: string, requestId: string) =>
+      registry.call('notes.write', { body: 'Hi', requestId }, { request: new Request('https://x', { headers: { 'x-caller': who } }), env: {}, surface: 'direct', waitUntil: (p) => void waits.push(p) });
+
+    expect(await send('bad', 'r1')).toMatchObject({ ok: false, status: 500, code: 'INTERNAL' });
     await Promise.all(waits);
-    expect(result.ok).toBe(true);
-    expect(seen.map((e) => ({ actor: e.actor, hasVia: 'via' in e }))).toEqual([{ actor: 'c', hasVia: false }, { actor: 'c', hasVia: false }]);
+
+    expect(seen).toEqual([]);
+
+    const next = await send('good', 'r2');
+    await Promise.all(waits);
+
+    expect(next).toMatchObject({ ok: true, value: { id: 'n-1' } });
   });
 });
 
