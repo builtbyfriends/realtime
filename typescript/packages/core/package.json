@@ -1,6 +1,6 @@
 {
   "name": "@builtbyfriends/realtime",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Must-choose procedure builder and registry",
   "type": "module",
   "sideEffects": false,

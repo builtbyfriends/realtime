@@ -1,6 +1,6 @@
 {
   "name": "@builtbyfriends/realtime-data",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "One Durable Object per deployment: transactional SQLite documents, indexes, FTS5, vectors and cancellable scheduled jobs",
   "type": "module",
   "sideEffects": false,
@@ -15,7 +15,7 @@
     "src"
   ],
   "dependencies": {
-    "@builtbyfriends/realtime": "0.10.1"
+    "@builtbyfriends/realtime": "0.11.0"
   },
   "license": "MIT",
   "repository": {

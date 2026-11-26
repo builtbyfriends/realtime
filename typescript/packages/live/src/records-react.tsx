@@ -1,7 +1,8 @@
-import { createContext, createElement, useContext, useMemo, useSyncExternalStore } from 'react';
+import { createContext, createElement, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 import type { CommandName, CommandOutput, ContractSpec, GoodInput } from '@builtbyfriends/realtime';
 import { createRuntime } from './records.js';
+import { warnRefused } from './records-shared.js';
 import type { ReadCommands, RecordsDefinition, RecordsOptions, RecordsSpec, Runtime, ViewState } from './records.js';
 
 export { eq, useLiveQuery } from '@tanstack/react-db';
@@ -36,8 +37,19 @@ const RecordsContext = createContext<Registry | undefined>(undefined);
  * `useRecords` and builds no context and no subscription of its own.
  */
 export function RecordsProvider(props: RecordsOptions & { children?: ReactNode }) {
-  const { client, transport, children } = props;
-  const registry = useMemo(() => registryFor({ client, transport }), [client, transport]);
+  const { client, transport, onRefused, children } = props;
+  const [latest] = useState<{ onRefused: RecordsOptions['onRefused'] }>({ onRefused });
+
+  useEffect(() => {
+    // Decision: the runtime outlives a render, so it reads the latest handler from this holder instead of being made again when the handler changes.
+    // oxlint-disable-next-line react/immutability -- see the Decision above
+    latest.onRefused = onRefused;
+  }, [latest, onRefused]);
+
+  const registry = useMemo(
+    () => registryFor({ client, transport, onRefused: (refusal) => (latest.onRefused ? latest.onRefused(refusal) : warnRefused(refusal.name, refusal.topic, refusal.error)) }),
+    [client, transport, latest],
+  );
 
   return createElement(RecordsContext.Provider, { value: registry }, children);
 }

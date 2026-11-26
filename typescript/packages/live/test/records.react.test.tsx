@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RecordsProvider, eq, useLiveQuery, useRecords, useView } from '../src/records-react.js';
 import { noteRecords, notesWorld } from './fixtures/notes.js';
 
@@ -53,6 +53,30 @@ describe('records in React', () => {
     unmount();
     await wait(50);
     expect(backend.listenerCount()).toBe(0);
+  });
+
+  it('calls the latest onRefused of the provider, without making the records again', async () => {
+    const world = notesWorld();
+    world.store.add('n-1', 'b-1', 'First');
+    const first = vi.fn();
+    const second = vi.fn();
+
+    const tree = (onRefused: () => void) => (
+      <RecordsProvider client={world.backend.client} transport={world.backend.transport} onRefused={onRefused}>
+        <Screen />
+      </RecordsProvider>
+    );
+
+    const { rerender } = render(tree(first));
+    await wait();
+    rerender(tree(second));
+    await wait();
+    expect(screen.getByTestId('one').textContent).toBe('First');
+    act(() => world.backend.refuse('notes:n-1'));
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(second.mock.calls[0]?.[0]).toMatchObject({ name: 'notes.Note', topic: 'notes:n-1' });
+    expect(screen.getByTestId('can').textContent).toBe('true');
   });
 
   it('asks for a provider when there is none', () => {

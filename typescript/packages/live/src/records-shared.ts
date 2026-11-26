@@ -12,7 +12,7 @@ export type RecordsClient = { call(name: string, input: unknown): Promise<unknow
  * payload is checked against the contract before it's used.
  */
 export type EventTransport = {
-  subscribe(topic: string, onEvent: (event: unknown) => void): Promise<() => void> | (() => void);
+  subscribe(topic: string, onEvent: (event: unknown) => void, onRefused?: (error: Error) => void): Promise<() => void> | (() => void);
   /** The connection came back after a drop, so events may have been missed. Returns an unsubscribe. */
   onReconnect(callback: () => void): () => void;
 };
@@ -48,6 +48,37 @@ export async function parse(schema: AnySchema, value: unknown, where: string): P
   return r.value;
 }
 
+/** What a window does with a refusal when the app gave no `onRefused`. */
+export function warnRefused(name: string, topic: string, error: Error): void {
+  console.warn(`live: ${name} stopped listening to "${topic}"`, error);
+}
+
+/**
+ * What a record does when the server ends a topic for good: tell the app once for each topic, until a watcher starts listening to
+ * it again (`watching` is called when one does). Without a hook the console gets a warning.
+ */
+export function refusalsOf(name: string, onRefused: ((refusal: { name: string; topic: string; error: Error }) => void) | undefined) {
+  const told = new Set<string>();
+
+  return {
+    watching: (topic: string) => {
+      told.delete(topic);
+
+      return (error: Error) => {
+        if (told.has(topic)) {return;}
+
+        told.add(topic);
+
+        if (onRefused) {
+          onRefused({ name, topic, error });
+        } else {
+          warnRefused(name, topic, error);
+        }
+      };
+    },
+  };
+}
+
 export function failureOf(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -72,12 +103,18 @@ export function topicsFor(contract: ContractSpec, events: ReadonlyArray<string>,
   return out;
 }
 
-export type Watch = { topic: string; handle: (event: unknown) => void };
+export type Watch = {
+  topic: string;
+  handle: (event: unknown) => void;
+  /** The server ended the subscription to this topic and wouldn't take it again, so no more events come until someone watches it again. */
+  refused?: (error: Error) => void;
+};
 
 type StopEntry = { ready: Promise<void>; stop: (() => void) | undefined };
 
 type Hub = {
   listeners: Map<string, Set<(event: unknown) => void>>;
+  refusals: Map<string, Set<(error: Error) => void>>;
   stops: Map<string, StopEntry>;
   reconnects: Set<() => void>;
   stopReconnect: (() => void) | undefined;
@@ -90,7 +127,7 @@ function hubOf(transport: EventTransport): Hub {
 
   if (kept) {return kept;}
 
-  const hub: Hub = { listeners: new Map(), stops: new Map(), reconnects: new Set(), stopReconnect: undefined };
+  const hub: Hub = { listeners: new Map(), refusals: new Map(), stops: new Map(), reconnects: new Set(), stopReconnect: undefined };
   hubs.set(transport, hub);
 
   return hub;
@@ -105,7 +142,7 @@ export function watcher(transport: EventTransport | undefined) {
     if (!transport) {return () => {};}
 
     const hub = hubOf(transport);
-    const mine: Array<{ topic: string; handle: (event: unknown) => void }> = [];
+    const mine: Array<Watch> = [];
 
     for (const w of watches) {
       const set = hub.listeners.get(w.topic) ?? new Set();
@@ -113,22 +150,46 @@ export function watcher(transport: EventTransport | undefined) {
       set.add(w.handle);
       mine.push(w);
 
+      if (w.refused) {
+        const refusals = hub.refusals.get(w.topic) ?? new Set();
+        hub.refusals.set(w.topic, refusals);
+        refusals.add(w.refused);
+      }
+
       if (!hub.stops.has(w.topic)) {
         const entry: StopEntry = { ready: Promise.resolve(), stop: undefined };
+        hub.stops.set(w.topic, entry);
+
+        const refuse = (error: Error) => {
+          // Decision: a topic the server won't take is dropped from the hub, so the next watcher asks again.
+          if (hub.stops.get(w.topic) === entry) {hub.stops.delete(w.topic);}
+
+          const told = hub.refusals.get(w.topic);
+
+          if (!told?.size) {
+            console.error(`live: subscribing to "${w.topic}" failed`, error);
+
+            return;
+          }
+
+          // oxlint-disable-next-line unicorn/no-useless-spread -- a callback may stop watching while the loop runs
+          for (const callback of [...told]) {callback(error);}
+        };
+
         entry.ready = Promise.resolve(
-          transport.subscribe(w.topic, (event) => {
-            for (const listener of hub.listeners.get(w.topic) ?? []) {listener(event);}
-          }),
+          transport.subscribe(
+            w.topic,
+            (event) => {
+              for (const listener of hub.listeners.get(w.topic) ?? []) {listener(event);}
+            },
+            refuse,
+          ),
         ).then(
           (stop) => {
             entry.stop = stop;
           },
-          (error: unknown) => {
-            console.error(`live: subscribing to "${w.topic}" failed`, error);
-            hub.stops.delete(w.topic);
-          },
+          (error: unknown) => refuse(failureOf(error)),
         );
-        hub.stops.set(w.topic, entry);
       }
     }
 
@@ -142,8 +203,11 @@ export function watcher(transport: EventTransport | undefined) {
         const set = hub.listeners.get(w.topic);
         set?.delete(w.handle);
 
+        if (w.refused) {hub.refusals.get(w.topic)?.delete(w.refused);}
+
         if (set?.size === 0) {
           hub.listeners.delete(w.topic);
+          hub.refusals.delete(w.topic);
           const entry = hub.stops.get(w.topic);
           hub.stops.delete(w.topic);
 

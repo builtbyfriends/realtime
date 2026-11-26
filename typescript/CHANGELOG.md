@@ -1,5 +1,16 @@
 # Changes
 
+## 0.11.0
+
+- Live records follow bwf's `stream.revoke()`. bwf 1.13.7 and 1.13.8 let an app end open subscriptions, tell the window with a `revoked` signal, and not subscribe the topic again, not even after a reconnect. Before this release a record whose topic was revoked went quiet until the page loaded again. Now `bwfTransport` asks for the topic again, once, and the server's `onSubscribe` decides.
+  - Accepted: events keep coming, and every watched read loads again once (after all the topics that were renewed together), since events in between are lost.
+  - Refused: the listeners of the topic are told once, and nothing asks again. A subscribe that is refused the first time is told the same way. Before, it was only logged.
+- New: `onRefused({ name, topic, error })` on `RecordsProvider` and in the options of `createRuntime`. `name` is `<contract>.<record>` and `error` carries the server's `code`. It's called once for each record and topic until the record starts listening to the topic again. Without it a warning goes to the console. A view that listens to the topic goes to its `error` state and keeps its data. The `Refusal` type is exported.
+- `LiveTransport.subscribe` and `EventTransport.subscribe` take an optional third argument, `onRefused(error)`. A transport that doesn't call it works as before.
+- `fakeBackend` has `refuse(topic, error?)`.
+- `@builtbyfriends/realtime-bwf` needs bwf `^1.13.8` as a peer.
+- Browser runs in `bwf/live-e2e` on a real bwf stream: revoked then allowed (twice) keeps the events coming on the same stream, and revoked then refused tells the app once and asks once. The run fails on 0.10.1's transport, where the window goes quiet.
+
 ## 0.10.1
 
 - A failed event delivery is no longer silent. A module takes an optional `onDeliveryFailed(failure, env)`, called each time `publish` throws for an event. `failure` has the `event`, the `error`, the `attempt` (how many times this event has failed as this isolate has seen it) and `retrying` (true when an outbox keeps the event and will try again). Without the hook, each failure goes to `console.warn` with the event type, its topic and the error. An error thrown by the hook is logged and doesn't lose the event. `DeliveryFailure` is exported.

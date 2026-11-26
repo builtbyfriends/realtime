@@ -74,6 +74,24 @@ A read that depends on who's asking sits beside the record as a view, because it
 
 A view listens only while a component uses it. If a change can't be seen from either an event or a command of this window, the answer can be stale until the next one of those. A screen that needs it sooner calls `refresh()` on the handle (`runtime.views.can(input).refresh()`).
 
+## When the server ends a subscription
+
+An app can end a person's subscriptions with bwf's `stream.revoke()`, for example when they leave a project. bwf (1.13.8 or later) tells the window and doesn't subscribe the topic again, not after a reconnect either. `bwfTransport` handles that for live records:
+
+- It asks for the topic again, once. The server's `onSubscribe` answers for the person as they are now, so the answer is yes or no for each topic.
+- If the answer is yes, events keep coming. The ones published in between are lost, so every watched read loads again once, after all the topics that were asked for again.
+- If the answer is no, the listeners of the topic hear about it once, and nothing asks again. The record keeps the rows it has and gets no more events. The same goes for a subscribe that the server refuses the first time.
+
+The app hears a refusal in `onRefused`, on `RecordsProvider` or in the options of `createRuntime`:
+
+```tsx
+<RecordsProvider client={client} transport={transport} onRefused={({ name, topic, error }) => showNoAccess(topic, error)}>
+```
+
+It gets the record (`<contract>.<record>`), the topic and the error, which carries the server's `code`, such as `FORBIDDEN`. It's called once for each record and topic, until the record starts listening to that topic again, which happens when its last query lets go and a new one starts. Without it a warning goes to the console. A view that listens to the topic goes to its `error` state and keeps its last data. The records stay as they were: a feature that shouldn't show them any more removes them or hides the screen.
+
+`fakeBackend` has `refuse(topic, error?)` for a test.
+
 ## Who acted
 
 A module's event can say who ran the command (`actor`) and what acted for them (`via`, such as a thread that ran it for a person). The sign-in gives both, with `actorId` and `viaOf` on its auth provider, and Realtime treats them as plain text: rights stay with the caller.
@@ -118,7 +136,7 @@ Where it had already moved, for the next bump:
 - The versions seen, the keys each read loaded and each view handle are kept in memory and only cleared when the collection is cleaned up. For a window with a few thousand records that's small. Clear them per subset when that stops being true.
 - A removed record's version is gone once the collection is cleaned up.
 - Thirty views of thirty different notes make thirty `get` requests at once, one for each view, and a browser queues them behind its six connections to a host. They finish and a command still comes back, but a screen with that many views of different records would do better to read them with one list. Loading them in one request is a later job, tracked in DED-560.
-- When a subscribe call fails, the listeners of that topic stay with nothing feeding them until something else subscribes to the topic or a reconnect loads again. The error is logged. If this shows up in real use, the fix is to subscribe again on reconnect.
+- When a subscribe call fails or is refused, the listeners of that topic stay with nothing feeding them until a record starts listening to the topic again. The app hears about it in `onRefused`, or the console gets a warning. A reconnect loads the reads again but doesn't ask for the topic again. If this shows up in real use, the fix is to subscribe again on reconnect.
 
 ## Assumptions for later
 
