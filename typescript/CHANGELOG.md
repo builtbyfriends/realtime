@@ -1,5 +1,15 @@
 # Changes
 
+## 0.9.0
+
+- `@builtbyfriends/realtime-live` has a new `records` part: one typed copy of each record in a window, loaded and kept live from a contract, with commands that show their change at once, roll back on a failure, and run once when retried. It's built on TanStack DB, pinned at `1.0.0-rc.1.5`. Read `packages/live/GUIDE.md`.
+  - `defineRecords(contract, spec)` and `createRuntime` in `@builtbyfriends/realtime-live/records`.
+  - `RecordsProvider`, `useRecords`, `useView` and `useLiveQuery` in `@builtbyfriends/realtime-live/records/react`.
+  - `fakeBackend` in `@builtbyfriends/realtime-live/records/testing`, which runs a real module in the same process.
+- It adds about 39 KB gzipped (85 KB with the React entry) to an app that imports it. An app that imports only the older layer doesn't bundle it.
+- `LiveTransport.subscribe` passes the published event to its callback when the transport has it, and bwf's transport does. The older layer ignores it.
+- The older live layer is unchanged and sits beside the new one.
+
 ## 0.8.1
 
 - A `Registry` of no particular procedures types `~procedures` as `object` again, not as a string index of procedures. An app whose procedure map is an interface, as bwf's codegen writes it, fits `createClient<App>` and `createBwfLive<App>` again, as on 0.4. Between 0.7.0 and 0.8.0 it failed with "Index signature for type 'string' is missing". A registry built from its procedures types its map from them, as before.

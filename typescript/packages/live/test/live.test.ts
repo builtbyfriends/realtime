@@ -5,13 +5,16 @@ import type { LiveTransport } from '../src/index.js';
 function fakeTransport() {
   const topics = new Map<string, Set<() => void>>();
   const reconnects = new Set<() => void>();
+
   const transport: LiveTransport = {
     subscribe: async (topic, cb) => {
       (topics.get(topic) ?? topics.set(topic, new Set()).get(topic)!).add(cb);
+
       return () => void topics.get(topic)!.delete(cb);
     },
     onReconnect: (cb) => (reconnects.add(cb), () => void reconnects.delete(cb)),
   };
+
   return {
     transport,
     emit: (topic: string) => topics.get(topic)?.forEach((cb) => cb()),
@@ -34,6 +37,7 @@ describe('live store', () => {
     const call = vi.fn(async (name: string, input: any) => ({ name, input, n: ++n }));
     const t = fakeTransport();
     const live = createLive<any>({ client: { call }, transport: t.transport, topics: { 'messages.list': (i: any) => [`messages:channel:${i.channel}`] }, ...extra });
+
     return { call, t, live };
   }
 
@@ -57,7 +61,9 @@ describe('live store', () => {
     const q = live.query('messages.list', { channel: 'a' });
     q.subscribe(() => {});
     await flush();
+
     for (let i = 0; i < 5; i++) {t.emit('messages:channel:a');}
+
     await flush();
     expect(call).toHaveBeenCalledTimes(2);
     expect(q.getSnapshot().data).toMatchObject({ n: 2 });
@@ -159,19 +165,27 @@ describe('live store', () => {
     function chat() {
       let messages = ['hi'];
       let fail = false;
+
       const call = vi.fn(async (name: string, input: any) => {
         if (name === 'messages.list') {return [...messages];}
+
         await new Promise((r) => setTimeout(r, 100));
+
         if (fail) {throw new Error('refused');}
+
         messages = [...messages, input.body];
+
         return null;
       });
+
       const live = createLive<any>({ client: { call }, transport: fakeTransport().transport, topics: { 'messages.list': () => ['messages'] } });
       const q = live.query('messages.list', { channel: 'a' });
       q.subscribe(() => {});
+
       const optimistic = (body: string) => ({
         optimistic: (store: any) => store.update('messages.list', { channel: 'a' }, (list: Array<string>) => [...list, body]),
       });
+
       return { live, q, call, optimistic, refuse: () => void (fail = true) };
     }
 
@@ -234,6 +248,7 @@ describe('live store', () => {
       const call = vi.fn(() => new Promise((res) => gates.push(res)));
       const t = fakeTransport();
       const live = createLive<any>({ client: { call }, transport: t.transport, topics: { 'messages.list': () => ['messages'] } });
+
       return { gates, call, t, live };
     }
 
@@ -262,12 +277,14 @@ describe('live store', () => {
       const q = live.query('messages.list', { channel: 'a' });
       q.subscribe(() => {});
       await flush();
+
       const sent = live.mutate('messages.send', {}, {
         optimistic: (store: any) => {
           store.update('messages.list', { channel: 'a' }, (list: Array<string>) => [...list, 'yo']);
           throw new Error('bad guess');
         },
       });
+
       await expect(sent).rejects.toThrow('bad guess');
       expect(q.getSnapshot().data).toEqual(['hi']);
       expect(call.mock.calls.some(([name]) => name === 'messages.send')).toBe(false);
@@ -345,12 +362,14 @@ describe('live store', () => {
       live.query('messages.list', { channel: 'a' }).subscribe(() => {});
       await vi.advanceTimersByTimeAsync(0);
       expect(call).toHaveBeenCalledTimes(1);
+
       const stream = async (from: number, to: number) => {
         for (let at = from; at < to; at += 10) {
           t.emit('messages:channel:a');
           await vi.advanceTimersByTimeAsync(10);
         }
       };
+
       await stream(0, 190);
       expect(call).toHaveBeenCalledTimes(1);
       await stream(190, 200);
@@ -440,20 +459,28 @@ describe('live store', () => {
       let messages = ['hi'];
       let failList = false;
       const failSend = new Set<string>();
+
       const call = vi.fn(async (name: string, input: any) => {
         await new Promise((r) => setTimeout(r, name === 'messages.send' && failSend.has(input.body) ? 50 : name === 'messages.send' ? 200 : 100));
+
         if (name === 'messages.list') {
           if (failList) {throw new Error('list down');}
+
           return [...messages];
         }
+
         if (failSend.has(input.body)) {throw new Error('refused');}
+
         messages = [...messages, input.body];
+
         return null;
       });
+
       const live = createLive<any>({ client: { call } });
       const q = live.query('messages.list', { channel: 'a' });
       const stop = q.subscribe(() => {});
       const opt = (body: string) => ({ optimistic: (store: any) => store.update('messages.list', { channel: 'a' }, (l: Array<string>) => [...l, body]) });
+
       return { live, q, stop, opt, failSend, failList: () => void (failList = true) };
     }
 

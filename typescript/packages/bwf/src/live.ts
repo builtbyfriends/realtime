@@ -51,7 +51,7 @@ export type BwfTransportOptions = {
  * is reported to the store, which refetches the queries being watched.
  */
 export function bwfTransport(options: BwfTransportOptions): LiveTransport {
-  const reconnects = new Set<() => void>();
+  const reconnects = new Set<(event?: unknown) => void>();
   let stream: ReturnType<ConnectLiveStream> | undefined;
   let opens = 0;
 
@@ -90,11 +90,11 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
    * number of subscriptions per topic and per connection (256 by default), and a page often has
    * many queries on the same topic, so one subscription each would run out.
    */
-  const topics = new Map<string, { listeners: Set<() => void>; stop: Promise<() => Promise<void>> }>();
+  const topics = new Map<string, { listeners: Set<(event?: unknown) => void>; stop: Promise<() => Promise<void>> }>();
 
   const unsubscribing = new Map<string, Promise<void>>();
 
-  function release(topic: string, entry: { listeners: Set<() => void>; stop: Promise<() => Promise<void>> }) {
+  function release(topic: string, entry: { listeners: Set<(event?: unknown) => void>; stop: Promise<() => Promise<void>> }) {
     if (entry.listeners.size || topics.get(topic) !== entry) {return;}
     topics.delete(topic);
     const done = entry.stop.then((stop) => stop()).catch(() => {});
@@ -108,14 +108,14 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
     async subscribe(topic, onEvent) {
       let entry = topics.get(topic);
       if (!entry) {
-        const listeners = new Set<() => void>();
+        const listeners = new Set<(event?: unknown) => void>();
         const subscribe = () =>
           open().subscribe({
             id: topic,
             topic,
-            onEvent: () => {
+            onEvent: (event) => {
               // oxlint-disable-next-line unicorn/no-useless-spread -- listeners may unsubscribe while being called
-              for (const listener of [...listeners]) {listener();}
+              for (const listener of [...listeners]) {listener(event);}
             },
           });
         // Decision: a subscribe with a used id replaces it on the server, so wait for the queued unsubscribe of this topic first.
@@ -128,7 +128,7 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
           if (topics.get(topic) === failed) {topics.delete(topic);}
         });
       }
-      const listener = () => onEvent();
+      const listener = (event?: unknown) => onEvent(event);
       entry.listeners.add(listener);
       try {
         await entry.stop;

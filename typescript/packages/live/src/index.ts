@@ -12,8 +12,8 @@ export type Typed = { readonly '~procedures'?: unknown };
  * store never trusts an event's payload: an event only means "this query may be stale".
  */
 export interface LiveTransport {
-  /** Listen to a topic. Resolves to the function that stops listening. */
-  subscribe(topic: string, onEvent: () => void): Promise<() => void> | (() => void);
+  /** Listen to a topic. Resolves to the function that stops listening. `event` is what was published, when the transport has it. */
+  subscribe(topic: string, onEvent: (event?: unknown) => void): Promise<() => void> | (() => void);
   /** The connection came back after a drop, so events may have been missed. Returns an unsubscribe. */
   onReconnect(callback: () => void): () => void;
 }

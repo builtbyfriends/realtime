@@ -4,6 +4,7 @@ import type { AnyProcedure } from '@builtbyfriends/realtime';
 
 // Decision: a generated procedure map (what `@builtbyfriends/bwf` emits) is a plain `{ '~procedures': Map }`, not a Registry.
 type Map = { 'count.get': AnyProcedure };
+
 type Typed1 = { readonly '~procedures'?: Map };
 
 describe('typed procedures', () => {
