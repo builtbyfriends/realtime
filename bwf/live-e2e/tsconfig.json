@@ -1,0 +1,45 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": [
+      "@builtbyfriends/bwf/env",
+      "@cloudflare/workers-types"
+    ],
+    "paths": {
+      "@builtbyfriends/realtime-bwf/live": [
+        "../../typescript/packages/bwf/src/live.ts"
+      ],
+      "@builtbyfriends/realtime-live/records/react": [
+        "../../typescript/packages/live/src/records-react.tsx"
+      ],
+      "@builtbyfriends/realtime-live/records": [
+        "../../typescript/packages/live/src/records.ts"
+      ],
+      "@builtbyfriends/realtime-live": [
+        "../../typescript/packages/live/src/index.ts"
+      ],
+      "@builtbyfriends/realtime": [
+        "../../typescript/packages/core/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "routes",
+    "client",
+    ".bwf/**/*.d.ts"
+  ]
+}

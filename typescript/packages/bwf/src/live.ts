@@ -23,6 +23,27 @@ export type ConnectLiveStream = (
 type StreamSource = { addEventListener(type: string, listener: () => void): void };
 type StreamSourceConstructor = new (url: string, init?: { withCredentials?: boolean }) => StreamSource;
 
+type Envelope = { subscriptionId: string; topic?: string; type?: string; data?: unknown };
+
+function isEnvelope(event: unknown): event is Envelope {
+  return typeof event === 'object' && event !== null && 'subscriptionId' in event && 'data' in event;
+}
+
+// Decision: bwf wraps what a module publishes in an envelope ({ subscriptionId, topic, type, data }), and records want
+// what was published: a module event, or, when a publisher sent only the payload, the envelope's type as the event
+// name. Anything that isn't an envelope passes as it is.
+function unwrap(event: unknown): unknown {
+  if (!isEnvelope(event)) {return event;}
+
+  const { data, type, topic } = event;
+
+  if (typeof data !== 'object' || data === null) {return event;}
+
+  if ('payload' in data) {return data;}
+
+  return typeof type === 'string' ? { name: type, topic, payload: data } : event;
+}
+
 export type BwfTransportOptions = {
   /** `connectLiveStream` from `@builtbyfriends/bwf/live/client`. */
   connect: ConnectLiveStream;
@@ -115,7 +136,7 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
             topic,
             onEvent: (event) => {
               // oxlint-disable-next-line unicorn/no-useless-spread -- listeners may unsubscribe while being called
-              for (const listener of [...listeners]) {listener(event);}
+              for (const listener of [...listeners]) {listener(unwrap(event));}
             },
           });
         // Decision: a subscribe with a used id replaces it on the server, so wait for the queued unsubscribe of this topic first.

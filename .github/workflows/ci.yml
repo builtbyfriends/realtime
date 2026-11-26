@@ -41,3 +41,20 @@ jobs:
             (cd "$dir" && bun pm pack --dry-run > /dev/null)
           done
           (cd packages/bwf && bun pm pack --dry-run | grep -q 'dist/devtools.html')
+
+  live-browser:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bwf/live-e2e
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run live records in Chromium on a real bwf stream
+        run: npm test
