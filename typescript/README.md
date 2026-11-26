@@ -170,6 +170,12 @@ Built and tested with TypeScript 7.0, Zod 4.6, Valibot 1.5, agents 0.34, MCP SDK
 wrangler 4.166 and vitest 5.1. The example Worker bundles to 1.26 MB (222 KB gzipped),
 mostly the MCP SDK and Zod.
 
+## Try a change before it releases
+
+A pull request that changes `typescript/` publishes a snapshot of every package in about a minute, and comments with the version, such as `0.11.1-snap.41.ga1b2c3d`. The version is the next release after the one the pull request starts from, `snap` marks it, `41` is the pull request, and `g` with seven characters is the commit. Every package gets it, and they ask each other for it. It's published under the `snapshot` tag, and it's removed after 30 days.
+
+In a branch of an app, pin that exact version of each Realtime package and install. A range such as `^0.11.0` never picks a snapshot up. `@builtbyfriends/realtime-bwf` asks for `@builtbyfriends/bwf ^1.13.8`, which a bwf snapshot doesn't satisfy, so an app on both snapshots sees a warning from bun and a stop from npm. Move the pins back to releases before the branch merges. To publish a snapshot of a branch with no pull request, run the Snapshot workflow by hand and give it a short label.
+
 ## Not done yet
 
 - Session-cookie auth provider (the example uses API tokens; `anyOf()` combines providers).
