@@ -1,6 +1,6 @@
 {
   "name": "@builtbyfriends/realtime-live",
-  "version": "0.9.2",
+  "version": "0.10.0",
   "description": "Live queries: an RPC call plus topic subscriptions, refetched on events and reconnects. The records entry keeps one typed copy of each record, from a contract.",
   "type": "module",
   "sideEffects": false,
@@ -39,7 +39,7 @@
     }
   },
   "dependencies": {
-    "@builtbyfriends/realtime": "0.9.2",
+    "@builtbyfriends/realtime": "0.10.0",
     "@tanstack/db": "1.0.0-rc.1.5",
     "@tanstack/react-db": "1.0.0-rc.1.5"
   },

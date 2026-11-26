@@ -109,7 +109,12 @@ export class NoteStore {
   }
 }
 
-const apiToken = bearerAuth<{ id: string }, Env>({ name: 'token', verify: (token) => (token === 'ok' ? { id: 'u-1' } : null), actorId: (c) => c.id });
+const apiToken = bearerAuth<{ id: string; via?: string }, Env>({
+  name: 'token',
+  verify: (token) => (token === 'ok' ? { id: 'u-1' } : token === 'ok:thread' ? { id: 'u-1', via: 'thread-1' } : null),
+  actorId: (c) => c.id,
+  viaOf: (c) => c.via,
+});
 
 export function notesWorld(onEvent?: (event: ContractEvent) => void) {
   const store = new NoteStore();

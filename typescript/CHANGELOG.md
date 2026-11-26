@@ -1,5 +1,17 @@
 # Changes
 
+## 0.10.0
+
+- A module's event says who ran the command and what acted for them. `ContractEvent` has two new optional fields, `actor` and `via`.
+  - `actor` is the id the auth provider's `actorId` gives for the caller. It's left out when the sign-in names no one, and it's missing on events an outbox kept before this release.
+  - `via` is a plain label for what acted for the caller, such as a thread that ran a command for a person. An auth provider gives it with the new optional `viaOf(ctx)`, and `bearerAuth` takes it as an option. `anyOf` asks the provider that resolved the caller, as it does for `actorId`. Realtime doesn't read it, compare it or use it for rights: those stay with the caller. It's left out when the sign-in names nothing.
+  - A provider that throws while naming either doesn't fail the command; the event goes out without that label.
+  - The run-once key is unchanged: the caller and the request id, without `via`.
+  - Both labels go to everyone who reads the topic, so a sign-in shouldn't put anything private in them.
+- `contractChecks` takes `callerLabels` in its fixtures. With it, an event from a named caller has to carry that caller's `actor`, an event from an unnamed one carries none, and `via` follows the same way.
+- The page `contractDocs` prints says that each event carries both.
+- bwf's transport and live records already pass the whole event on. A browser run in `bwf/live-e2e` publishes through a sign-in that names `via` and sees both labels in the window.
+
 ## 0.9.2
 
 - bwf's transport gives live records the event a module published. bwf delivers it inside an envelope (`{ subscriptionId, topic, type, data }`), and records read the envelope as the record, so every live event failed the contract check and the window only changed when it loaded again. The unit tests missed it because their fake hands over the module's event as it is. A browser run against a real bwf stream found it. The transport now passes `data` when it holds a module event, names a bare payload by the envelope's `type`, and leaves anything else as it was.

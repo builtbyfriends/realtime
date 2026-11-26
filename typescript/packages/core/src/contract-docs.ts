@@ -158,6 +158,7 @@ export function contractDocs(contract: Contract): string {
     '',
     '## Events',
     '',
+    ...(events.length ? ['Each event also says who ran the command (`actor`, when the sign-in names them) and what acted for them (`via`, when the sign-in names one). Both go to everyone who reads the topic.', ''] : []),
     events.join('\n\n') || 'None.',
     '',
     ...retriesText(contract),

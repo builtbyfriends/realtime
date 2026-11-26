@@ -72,4 +72,27 @@ describe('anyOf', () => {
     const ctx = await either.resolve(req(), env);
     expect(either.actorId!(ctx)).toBe('u-1');
   });
+
+  it('asks the provider that resolved the caller what acted for them', async () => {
+    type Session = { session: { userId: string } };
+
+    type Key = { key: { owner: string; thread: string } };
+
+    const session = { name: 'session', resolve: async () => null, viaOf: () => 'wrong' };
+    const key = { name: 'key', resolve: async () => ({ key: { owner: 'u-1', thread: 'thread-1' } }), viaOf: (c: Session | Key) => (c as Key).key.thread };
+
+    const either = anyOf<Session | Key>('either', session, key);
+    const ctx = await either.resolve(req(), env);
+    expect(either.viaOf!(ctx)).toBe('thread-1');
+    expect(either.actorId!(ctx)).toBeUndefined();
+  });
+});
+
+describe('bearerAuth', () => {
+  it('gives the label of what acted for the caller when the app names one', async () => {
+    const auth = bearerAuth<{ id: string; thread?: string }>({ verify: (t) => (t === 'k' ? { id: 'u-1', thread: 't-1' } : null), actorId: (c) => c.id, viaOf: (c) => c.thread });
+    const ctx = await auth.resolve(new Request('https://x', { headers: { authorization: 'Bearer k' } }), undefined);
+    expect([auth.actorId!(ctx!), auth.viaOf!(ctx!)]).toEqual(['u-1', 't-1']);
+    expect(bearerAuth({ verify: () => null }).viaOf).toBeUndefined();
+  });
 });

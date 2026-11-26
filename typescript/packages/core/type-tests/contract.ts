@@ -2,7 +2,7 @@
 import { expectTypeOf } from 'expect-type';
 import { z } from 'zod';
 import { defineContract, implementContract, memoryRunOnce } from '@builtbyfriends/realtime';
-import type { CommandInput, RecordOf, StateOf } from '@builtbyfriends/realtime';
+import type { CommandInput, ContractEvent, RecordOf, StateOf } from '@builtbyfriends/realtime';
 
 const states = ['draft', 'sent'] as const;
 const Note = z.object({ id: z.string(), body: z.string(), state: z.enum(states) });
@@ -140,3 +140,7 @@ defineContract({
     read: { description: 'A note was read.', topic: ['notes:{id}', 'notes:{state}'], payload: Note },
   },
 });
+
+expectTypeOf<ContractEvent['actor']>().toEqualTypeOf<string | undefined>();
+
+expectTypeOf<ContractEvent['via']>().toEqualTypeOf<string | undefined>();
