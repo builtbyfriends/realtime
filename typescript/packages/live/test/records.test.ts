@@ -141,6 +141,64 @@ describe('a record shared by a list and a single view', () => {
     expect(t.list.toArray.map((n) => n.id)).toEqual(['n-1']);
   });
 
+  it('drops rows a screen showed once when a removal happened while nothing was watching', async () => {
+    const t = setup();
+    t.world.store.add('n-1', 'b-1', 'First');
+    t.world.store.add('n-2', 'b-1', 'Second');
+    await t.list.preload();
+    await t.list.cleanup();
+    await settle();
+    t.world.store.notes.delete('n-2');
+    const again = createLiveQueryCollection({ query: (q) => q.from({ n: t.runtime.collections.Note }).where(({ n }) => eq(n.boardId, 'b-1')) });
+    await again.preload();
+    await settle();
+    expect(again.toArray.map((n) => n.id)).toEqual(['n-1']);
+  });
+
+  it('drops a record whose single read now answers not found', async () => {
+    const t = setup();
+    t.world.store.add('n-1', 'b-1', 'First');
+    await t.one.preload();
+    await t.one.cleanup();
+    await settle();
+    t.world.store.notes.delete('n-1');
+    const again = createLiveQueryCollection({ query: (q) => q.from({ n: t.runtime.collections.Note }).where(({ n }) => eq(n.id, 'n-1')) });
+    await again.preload();
+    await settle();
+    expect(again.toArray).toEqual([]);
+  });
+
+  it('takes a second change with the same version, and not an older record after a removal', async () => {
+    const t = setup();
+    const a = t.world.store.add('n-1', 'b-1', 'First');
+    await t.list.preload();
+    t.backend.deliver(renamed(a, 'Tie one', '2026-12-01T00:00:00.000Z'));
+    t.backend.deliver(renamed(a, 'Tie two', '2026-12-01T00:00:00.000Z'));
+    await settle();
+    expect(t.list.toArray[0]?.title).toBe('Tie two');
+  });
+
+  it('joins two record types in a live query, and updates when either side changes', async () => {
+    const t = setup();
+    const board = t.world.store.addBoard('b-1', 'Plans');
+    t.world.store.add('n-1', 'b-1', 'First');
+    const { Note, Board } = t.runtime.collections;
+
+    const joined = createLiveQueryCollection((q) =>
+      q.from({ n: Note }).where(({ n }) => eq(n.boardId, 'b-1')).join({ b: Board }, ({ n, b }) => eq(n.boardId, b.id)).select(({ n, b }) => ({ id: n.id, title: n.title, board: b.name })),
+    );
+
+    await joined.preload();
+    await settle();
+    expect(joined.toArray.map((r) => `${r.title} on ${r.board}`)).toEqual(['First on Plans']);
+    await t.runtime.commands.rename({ id: 'n-1', title: 'Renamed' }).settled;
+    await settle();
+    expect(joined.toArray.map((r) => `${r.title} on ${r.board}`)).toEqual(['Renamed on Plans']);
+    t.backend.deliver({ module: 'notes', name: 'boardRenamed', event: 'notes.boardRenamed', topic: 'boards:b-1', payload: { ...board, name: 'Ideas', updatedAt: '2026-12-02T00:00:00.000Z' } });
+    await settle();
+    expect(joined.toArray.map((r) => `${r.title} on ${r.board}`)).toEqual(['Renamed on Ideas']);
+  });
+
   it('refuses an answer that does not match the contract', async () => {
     const t = setup();
     const bad = createRuntime(noteRecords, { client: { call: async () => [{ id: 'n-1' }] }, transport: t.backend.transport });
@@ -160,26 +218,26 @@ describe('a record shared by a list and a single view', () => {
     expect(t.backend.listenerCount()).toBe(0);
   });
 
-  it('ends on the newest record whatever the order and the repeats of events', async () => {
+  it('ends on the newest record, and on the last of equal versions, whatever the order and the repeats of events', async () => {
     await fc.assert(
       fc.asyncProperty(
-        fc.uniqueArray(fc.integer({ min: 1, max: 500 }), { minLength: 1, maxLength: 8 }),
-        fc.array(fc.nat(), { minLength: 1, maxLength: 20 }),
-        async (versions, picks) => {
+        fc.array(fc.record({ version: fc.integer({ min: 1, max: 4 }), title: fc.constantFrom('a', 'b', 'c') }), { minLength: 1, maxLength: 16 }),
+        async (delivered) => {
           const t = setup();
           const first = t.world.store.add('n-1', 'b-1', 'start');
           await t.list.preload();
           const at = (v: number) => new Date(Date.UTC(2026, 11, 1, 0, 0, 0, v)).toISOString();
-          const delivered = picks.map((p) => versions[p % versions.length]);
 
-          for (const v of delivered) {t.backend.deliver(renamed(first, `v${v}`, at(v)));}
+          for (const { version, title } of delivered) {t.backend.deliver(renamed(first, title, at(version)));}
 
           await settle();
-          expect(t.list.toArray[0]?.title).toBe(`v${Math.max(...delivered)}`);
+          const top = Math.max(...delivered.map((d) => d.version));
+          const last = delivered.findLast((d) => d.version === top);
+          expect(t.list.toArray[0]?.title).toBe(last?.title);
           await t.list.cleanup();
         },
       ),
-      { numRuns: 60 },
+      { numRuns: 80 },
     );
   });
 });

@@ -44,7 +44,7 @@ export default defineConfig({
       // Decision: These files take what comes over the wire, a published event or a command's answer, and check it with the
       // contract's own schemas before anything uses it. The input is unknown on purpose until that check runs, and the
       // packages have no logger, so a failed event goes to the console.
-      files: ['**/packages/live/src/records.ts', '**/packages/live/src/records-testing.ts'],
+      files: ['**/packages/live/src/records*.ts', '**/packages/live/src/record-store.ts', '**/packages/live/src/view-store.ts', '**/packages/live/src/commands.ts'],
       rules: {
         'anti-slop/no-runtime-typeof': 'off',
         'anti-slop/no-unknown-parameters': 'off',

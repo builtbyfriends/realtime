@@ -57,8 +57,8 @@ The list and the single view hold the same record. Rename it and both change in 
 
 - **One collection per record type.** It holds each record once, by `key`. It loads on demand: a query for `boardId = 'b-1'` calls the read that matches, and listens to the topics that read's input fills in. When the last query for it goes away, it stops listening.
 - **Events carry the record.** The window applies the payload, checked against the contract. It listens to the topics of the events you list, filled from the read's input. A topic is used when all of its fields are in that input.
-- **Newer wins.** A record only replaces one with a smaller `version`. A removed record leaves its version behind, so an older update can't bring it back.
-- **A reconnect loads again.** Every watched read runs again. A list read also drops the records it no longer lists.
+- **Newer wins.** A record replaces one with a smaller `version`. With an equal version it replaces the old one when the row differs, because a lost change is worse than a repeated one. A removed record needs a strictly newer version to come back. A contract whose version is a counter (1, 2, 3) has no ties, so prefer one when a record can change twice in the same millisecond. With ties, a stale repeat of an older tied row can win again; the counter avoids that too.
+- **A reconnect loads again.** Every watched read runs again. A read also drops the records it listed last time and no longer lists, and a single read that answers `NOT_FOUND` drops its record. This holds when a screen was gone while the record was removed: what each read loaded is kept until the collection is cleaned up, so the next load can compare. A record that another watched read still lists stays.
 - **A command is one intent.** `commands.rename(input)` makes one request id and gives it back as `requestId`. Pass `{ requestId }` as the second argument to retry: the module answers with the first result and runs nothing twice. The answer goes into the collection before the command settles.
 - **Answers and events are checked** against the contract's schemas where they come in. A mismatch fails the load and is logged for an event. It's on in production too, since the cost is a schema parse per message. Turn it off only if it shows up in a profile.
 - **Errors are typed.** `result.error.code` is one of the codes the command lists, plus the codes the pipeline adds (`UNAUTHENTICATED`, `FORBIDDEN`, `INVALID_INPUT`, `INTERNAL`). A `switch` on it is checked by the compiler.
@@ -103,13 +103,15 @@ Where it had already moved, for the next bump:
 
 ## What it can't do, or does badly
 
-- A query it has no read for throws. A query on `title` for a list read that only takes `boardId` is a mistake in the feature, and the message says which fields it saw. Only `eq` filters map to reads.
+- A query with no `eq` or `in` filter that a read covers throws, such as a whole collection with no `where`. The message says which fields it saw. The first source of a join needs a `where` for this reason.
+- A query it has no read for throws. A query on `title` for a list read that only takes `boardId` is a mistake in the feature, and the message says which fields it saw. Only `eq` and `in` filters map to reads.
 - An optimistic change on a record that isn't loaded fails inside TanStack DB. Guard it with `Note.has(id)`, as above.
-- A record's version is kept in memory. After the collection is cleaned up and loaded again, a removed record's version is gone.
+- The versions seen, the keys each read loaded and each view handle are kept in memory and only cleared when the collection is cleaned up. For a window with a few thousand records that's small. Clear them per subset when that stops being true.
+- A removed record's version is gone once the collection is cleaned up.
 
 ## Assumptions for later
 
 - **Paging.** The Thread screen doesn't need it. A list read returns everything in its scope. TanStack DB passes limits and cursors to a read when it's on demand, so adding it should mean a read with `limit` and `cursor` inputs and a line in the spec.
 - **Offline writes and saving across restarts.** Not part of this. TanStack DB has persistence and an offline queue for them.
 - **Catching up from a position.** The older sync path (change index and sync sockets) can ask for what happened after a position, which loads less than a full read after a drop. This layer loads again in full. Worth taking later when a list gets long.
-- **Joins across modules.** Live queries can join two modules' collections, so a screen can show a thread with its ask without one feature reaching into the other. It's not shown in a test yet.
+- **Joins across modules.** Live queries can join two record types' collections, so a screen can show a thread with its ask without one feature reaching into the other. A test joins a note with its board and updates when either side changes. The side that is joined on loads with a list of keys, and each key calls the read once.

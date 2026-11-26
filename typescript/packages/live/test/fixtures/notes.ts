@@ -5,6 +5,7 @@ import { defineRecords } from '../../src/records.js';
 import { fakeBackend } from '../../src/records-testing.js';
 
 const Note = z.object({ id: z.string(), boardId: z.string(), title: z.string(), updatedAt: z.iso.datetime() });
+const Board = z.object({ id: z.string(), name: z.string(), updatedAt: z.iso.datetime() });
 const ById = z.object({ id: z.string().min(1) });
 const notFound = { NOT_FOUND: { status: 404, message: 'No note with this id' } } as const;
 const asTool = { needsApproval: false } as const;
@@ -13,7 +14,7 @@ const topics = ['notes:{id}', 'boards:{boardId}:notes'] as const;
 export const notes = defineContract({
   name: 'notes',
   description: 'A short note that sits on a board.',
-  data: { Note },
+  data: { Note, Board },
   requestIds: { keepHours: 24 },
   commands: {
     get: { description: 'Show one note.', effect: 'read', input: ById, output: Note, errors: notFound, capability: 'notes.read', tool: asTool, cli: true, example: { id: 'n-1' } },
@@ -28,6 +29,7 @@ export const notes = defineContract({
       cli: true,
       example: { boardId: 'b-1' },
     },
+    board: { description: 'Show one board.', effect: 'read', input: ById, output: Board, errors: notFound, capability: 'notes.read', tool: asTool, cli: true, example: { id: 'b-1' } },
     can: {
       description: 'What the caller may do with a note right now.',
       effect: 'read',
@@ -66,16 +68,20 @@ export const notes = defineContract({
   },
   events: {
     renamed: { description: 'A note got a new title.', topic: topics, payload: Note },
+    boardRenamed: { description: 'A board got a new name.', topic: 'boards:{id}', payload: Board },
     removed: { description: 'A note was deleted.', topic: topics, payload: z.object({ id: z.string(), boardId: z.string() }) },
   },
 });
 
 export type NoteRecord = RecordOf<typeof notes, 'Note'>;
 
+export type BoardRecord = RecordOf<typeof notes, 'Board'>;
+
 export type Env = { TOKENS: string };
 
 export class NoteStore {
   readonly notes = new Map<string, NoteRecord>();
+  readonly boards = new Map<string, BoardRecord>();
   readonly feed: Array<ContractEvent> = [];
   clock = 0;
   renameCalls = 0;
@@ -85,6 +91,13 @@ export class NoteStore {
     this.clock += 1;
 
     return new Date(Date.UTC(2026, 10, 26, 12, 0, 0, this.clock)).toISOString();
+  }
+
+  addBoard(id: string, name: string): BoardRecord {
+    const board = { id, name, updatedAt: this.stamp() };
+    this.boards.set(id, board);
+
+    return board;
   }
 
   add(id: string, boardId: string, title: string): NoteRecord {
@@ -110,6 +123,7 @@ export function notesWorld() {
     commands: {
       get: ({ input, fail }) => store.notes.get(input.id) ?? fail('NOT_FOUND'),
       list: ({ input }) => [...store.notes.values()].filter((n) => n.boardId === input.boardId),
+      board: ({ input, fail }) => store.boards.get(input.id) ?? fail('NOT_FOUND'),
       can: ({ input, fail }) => ({ rename: (store.notes.get(input.id) ?? fail('NOT_FOUND')).title !== 'Locked' }),
       remove: ({ input, fail, emit }) => {
         const note = store.notes.get(input.id) ?? fail('NOT_FOUND');
@@ -153,6 +167,7 @@ export const noteRecords = defineRecords(notes, {
       upserts: ['renamed'],
       removes: ['removed'],
     },
+    Board: { key: 'id', version: 'updatedAt', reads: { board: { id: 'id' } }, upserts: ['boardRenamed'] },
   },
   commands: {
     rename: {
