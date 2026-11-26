@@ -1,5 +1,13 @@
 # Changes
 
+## 0.8.0
+
+- `contractChecks` also tries random runs of commands, made from the contract with fast-check. Each run starts a few records in random states, then sends a random string of moves, the other writes and repeats of earlier requests. A listed move has to land in its state, an unlisted one has to be refused and leave the record where it was, and a request sent again with its `requestId` has to get the first answer and publish nothing. This finds orders nobody wrote a test for, such as a repeat that comes after the record has moved on.
+- A failure shrinks to the fewest steps and prints them with a seed and a path. Pass them back as `properties: { seed, path }` in the fixtures to run that case again, and keep them in the test once it's fixed. `properties.runs` (100 by default) and `properties.steps` (20 by default) set how much it tries. The tasks example runs 100 in about 20 ms.
+- Assumption: the move commands of one record take the same input, such as `{ id }`. The runs make each record with `arrange` of the first move command and send that input to each move. A contract whose moves need different inputs gets a failure that says so, and the fixtures will get a way to say how once one turns up.
+- A failed command keeps nothing with its `requestId`, as before, so the runs only repeat requests that succeeded.
+- `fast-check` is now a dependency of `@builtbyfriends/realtime`. The tasks example shows a property of its own with `@fast-check/vitest`, for what the contract can't say.
+
 ## 0.7.0
 
 - A contract can be served from more than one place. Each place gives a handler for the commands it serves and `{ reason }` for the rest, and registers only its own procedures. `contractChecks(owner, index)` checks the whole contract across the places, and fails a command that no place serves.

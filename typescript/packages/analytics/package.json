@@ -1,6 +1,6 @@
 {
   "name": "@builtbyfriends/realtime-analytics",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Analytics providers for realtime: Workers Analytics Engine, PostHog",
   "type": "module",
   "sideEffects": false,
@@ -16,7 +16,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@builtbyfriends/realtime": "0.7.0"
+    "@builtbyfriends/realtime": "0.8.0"
   },
   "repository": {
     "type": "git",

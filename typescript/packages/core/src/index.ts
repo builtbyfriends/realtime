@@ -102,4 +102,4 @@ export { memoryRunOnce, storageRunOnce, type RunOnceStorage, type RunOnceStore, 
 
 export { contractDocs } from './contract-docs.js';
 
-export { contractChecks, type ContractCheck, type ContractChecker, type ContractFixtures } from './contract-checks.js';
+export { contractChecks, type ContractCheck, type ContractChecker, type ContractFixtures, type PropertySettings } from './contract-checks.js';
