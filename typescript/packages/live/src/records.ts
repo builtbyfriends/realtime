@@ -120,9 +120,25 @@ export type Runtime<C extends ContractSpec, S extends RecordsSpec<C>> = {
   views: { [K in keyof S['views'] & ReadCommands<C>]: (input: GoodInput<C, K>) => ViewHandle<CommandOutput<C, K>> };
 };
 
+/** A topic the window listened to that the server ended and wouldn't take again. */
+export type Refusal = {
+  /** The record, as `<contract>.<record>`. */
+  name: string;
+  topic: string;
+  /** What the server said. A `LiveStreamError` from bwf carries its `code`, such as `FORBIDDEN`. */
+  error: Error;
+};
+
 export type RecordsOptions = {
   client: RecordsClient;
   transport?: EventTransport;
+  /**
+   * The server ended a subscription (bwf's `stream.revoke`), the transport asked for it again, and the server refused. The
+   * record keeps the rows it has and gets no more events, so this is where the app shows "no access". It's called once for
+   * each record and topic, and not again until the record starts listening to the topic again. Without it a warning goes
+   * to the console.
+   */
+  onRefused?: (refusal: Refusal) => void;
 };
 
 function buildRuntime<C extends ContractSpec, const S extends RecordsSpec<C>>(definition: RecordsDefinition<C, S>, options: RecordsOptions) {
@@ -132,7 +148,7 @@ function buildRuntime<C extends ContractSpec, const S extends RecordsSpec<C>>(de
   for (const [name, recordSpec] of Object.entries(spec.records)) {
     // Decision: Object.entries loses the link between a record's name and its spec; the types of `RecordsSpec` keep it.
     // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- see the Decision above
-    stores.set(name, recordStore(contract, name, recordSpec as RecordSpec<C, RecordName<C>>, options.client, options.transport));
+    stores.set(name, recordStore(contract, name, recordSpec as RecordSpec<C, RecordName<C>>, options.client, options.transport, options.onRefused));
   }
 
   const settled = settledBus();

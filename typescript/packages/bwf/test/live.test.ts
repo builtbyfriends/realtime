@@ -8,7 +8,10 @@ import { memoryStorage } from '../../data/test/storage.js';
 
 function fakeHost() {
   const subs = new Map<string, Map<string, (event: any) => void>>();
+  const revokers = new Map<string, Map<string, (event: any) => void>>();
+  const asked: Array<string> = [];
   const sources: Array<any> = [];
+  let refuse: Error | undefined;
   const connect: ConnectLiveStream = (_url, options) => {
     const open = () => {
       const source = new options!.eventSource!('/live?connectionId=x', { withCredentials: true });
@@ -17,8 +20,15 @@ function fakeHost() {
     };
     open();
     return {
-      subscribe: async ({ id, topic, onEvent }) => {
+      subscribe: async ({ id, topic, onEvent, onRevoked }) => {
+        asked.push(topic);
+
+        if (refuse) {throw refuse;}
+
         (subs.get(topic) ?? subs.set(topic, new Map()).get(topic)!).set(id, onEvent);
+
+        if (onRevoked) {(revokers.get(topic) ?? revokers.set(topic, new Map()).get(topic)!).set(id, onRevoked);}
+
         return async () => void subs.get(topic)!.delete(id);
       },
       close: () => {},
@@ -31,6 +41,14 @@ function fakeHost() {
     publish: (topic: string) => subs.get(topic)?.forEach((cb) => cb({ topic, type: 'changed', data: null })),
     count: (topic: string) => subs.get(topic)?.size ?? 0,
     sources: () => sources,
+    asked: () => asked,
+    refuseWith: (error: Error | undefined) => void (refuse = error),
+    revoke: (topic: string) => {
+      const ended = revokers.get(topic);
+      subs.get(topic)?.clear();
+      revokers.delete(topic);
+      ended?.forEach((cb, id) => cb({ subscriptionId: id, topic, reason: 'ended' }));
+    },
   };
 }
 
@@ -314,5 +332,138 @@ describe('data layer to live query, end to end', () => {
 
     expect(q.getSnapshot().data).toEqual(['hello']);
     expect(published).toContain('messages:channel:general');
+  });
+});
+
+describe('bwfTransport when the app ends a subscription', () => {
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  const forbidden = () => Object.assign(new Error('Forbidden'), { code: 'FORBIDDEN', status: 403 });
+
+  it('asks again once, keeps the events coming, and has the queries load again', async () => {
+    const v = fakeHost();
+    const t = bwfTransport({ connect: v.connect });
+    const heard = vi.fn();
+    const refused = vi.fn();
+    const reconnected = vi.fn();
+    t.onReconnect(reconnected);
+    await t.subscribe('x', heard, refused);
+    v.revoke('x');
+    await settle();
+    expect(v.asked()).toEqual(['x', 'x']);
+    expect(v.count('x')).toBe(1);
+    expect(reconnected).toHaveBeenCalledTimes(1);
+    v.publish('x');
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(refused).not.toHaveBeenCalled();
+    v.revoke('x');
+    await settle();
+    expect(v.asked()).toEqual(['x', 'x', 'x']);
+    v.publish('x');
+    expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it('tells each listener once when it is refused, and does not ask again', async () => {
+    const v = fakeHost();
+    const t = bwfTransport({ connect: v.connect });
+    const refusedA = vi.fn();
+    const refusedB = vi.fn();
+    const reconnected = vi.fn();
+    t.onReconnect(reconnected);
+    await t.subscribe('x', () => {}, refusedA);
+    await t.subscribe('x', () => {}, refusedB);
+    v.refuseWith(forbidden());
+    v.revoke('x');
+    await settle();
+    await settle();
+    expect(v.asked()).toEqual(['x', 'x']);
+    expect(refusedA).toHaveBeenCalledTimes(1);
+    expect(refusedB).toHaveBeenCalledTimes(1);
+    expect(refusedA.mock.calls[0][0]).toMatchObject({ code: 'FORBIDDEN' });
+    expect(reconnected).not.toHaveBeenCalled();
+    expect(v.count('x')).toBe(0);
+  });
+
+  it.each([
+    ['the network dropped', new TypeError('Failed to fetch')],
+    ['the server failed', Object.assign(new Error('Internal'), { code: 'INTERNAL_ERROR', status: 500 })],
+    ['the connection was lost', Object.assign(new Error('gone'), { code: 'CONNECTION_NOT_FOUND', status: 404 })],
+    ['the server was busy', Object.assign(new Error('slow down'), { status: 429 })],
+  ])('keeps the topic and asks again when the stream opens again, when %s, and does not call it a refusal', async (_why, failure) => {
+    const v = fakeHost();
+    const t = bwfTransport({ connect: v.connect });
+    const heard = vi.fn();
+    const refused = vi.fn();
+    const reconnected = vi.fn();
+    t.onReconnect(reconnected);
+    await t.subscribe('x', heard, refused);
+    v.refuseWith(failure);
+    v.revoke('x');
+    await settle();
+    expect(refused).not.toHaveBeenCalled();
+    expect(v.asked()).toEqual(['x', 'x']);
+    expect(reconnected).not.toHaveBeenCalled();
+    v.refuseWith(undefined);
+    v.sources()[0].dispatch('open');
+    await settle();
+    expect(v.asked()).toEqual(['x', 'x', 'x']);
+    expect(v.count('x')).toBe(1);
+    v.publish('x');
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(refused).not.toHaveBeenCalled();
+    expect(reconnected.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('asks again for a topic it lost when a new listener joins, and still tells the app when the answer is no', async () => {
+    const v = fakeHost();
+    const t = bwfTransport({ connect: v.connect });
+    const refused = vi.fn();
+    await t.subscribe('x', () => {}, () => {});
+    v.refuseWith(new TypeError('Failed to fetch'));
+    v.revoke('x');
+    await settle();
+    v.refuseWith(forbidden());
+    await expect(t.subscribe('x', () => {}, refused)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(v.asked()).toEqual(['x', 'x', 'x']);
+    expect(refused).not.toHaveBeenCalled();
+  });
+
+  it('listens to the topic again when someone subscribes to it after a refusal', async () => {
+    const v = fakeHost();
+    const t = bwfTransport({ connect: v.connect });
+    const stop = await t.subscribe('x', () => {}, () => {});
+    v.refuseWith(forbidden());
+    v.revoke('x');
+    await settle();
+    v.refuseWith(undefined);
+    stop();
+    await settle();
+    expect(v.asked()).toEqual(['x', 'x']);
+    const heard = vi.fn();
+    await t.subscribe('x', heard, () => {});
+    expect(v.asked()).toEqual(['x', 'x', 'x']);
+    v.publish('x');
+    expect(heard).toHaveBeenCalledTimes(1);
+  });
+
+  it('loads the queries once when several topics are renewed together, and refuses only the topic that was', async () => {
+    const v = fakeHost();
+    const t = bwfTransport({ connect: v.connect });
+    const reconnected = vi.fn();
+    const refusedZ = vi.fn();
+    t.onReconnect(reconnected);
+
+    for (const topic of ['a', 'b', 'c']) {await t.subscribe(topic, () => {}, () => {});}
+
+    await t.subscribe('z', () => {}, refusedZ);
+    v.revoke('a');
+    v.revoke('b');
+    v.revoke('c');
+    await settle();
+    expect(reconnected).toHaveBeenCalledTimes(1);
+    v.refuseWith(forbidden());
+    v.revoke('z');
+    await settle();
+    expect(refusedZ).toHaveBeenCalledTimes(1);
+    expect(reconnected).toHaveBeenCalledTimes(1);
   });
 });

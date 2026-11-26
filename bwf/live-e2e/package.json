@@ -7,7 +7,7 @@
     "test": "node test/run.mjs"
   },
   "dependencies": {
-    "@builtbyfriends/bwf": "^1.9.2",
+    "@builtbyfriends/bwf": "^1.13.8",
     "@tanstack/db": "1.0.0-rc.1.5",
     "@tanstack/react-db": "1.0.0-rc.1.5",
     "@cloudflare/workers-types": "^5.20261120.1",

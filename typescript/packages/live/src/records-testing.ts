@@ -17,6 +17,7 @@ export type FakeBackendOptions = {
  */
 export function fakeBackend(options: FakeBackendOptions) {
   const listeners = new Map<string, Set<(event: unknown) => void>>();
+  const refusals = new Map<string, Set<(error: Error) => void>>();
   const reconnects = new Set<() => void>();
 
   function deliver(event: ContractEvent) {
@@ -37,12 +38,22 @@ export function fakeBackend(options: FakeBackendOptions) {
   };
 
   const transport: EventTransport = {
-    subscribe(topic, onEvent) {
+    subscribe(topic, onEvent, onRefused) {
       const set = listeners.get(topic) ?? new Set();
       listeners.set(topic, set);
       set.add(onEvent);
 
-      return () => void set.delete(onEvent);
+      if (onRefused) {
+        const told = refusals.get(topic) ?? new Set();
+        refusals.set(topic, told);
+        told.add(onRefused);
+      }
+
+      return () => {
+        set.delete(onEvent);
+
+        if (onRefused) {refusals.get(topic)?.delete(onRefused);}
+      };
     },
     onReconnect(callback) {
       reconnects.add(callback);
@@ -56,6 +67,14 @@ export function fakeBackend(options: FakeBackendOptions) {
     transport,
     /** Delivers an event by hand, such as a repeat or a late one. */
     deliver,
+    /** The server ended the subscription to a topic and wouldn't take it again: its watchers are told, and no more events reach them. */
+    refuse: (topic: string, error: Error = new Error('FORBIDDEN')) => {
+      const told = [...(refusals.get(topic) ?? [])];
+      listeners.get(topic)?.clear();
+      refusals.delete(topic);
+
+      for (const callback of told) {callback(error);}
+    },
     /** The connection came back: every watcher loads again. */
     reconnect: () => {
       for (const callback of reconnects) {callback();}

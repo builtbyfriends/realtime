@@ -23,6 +23,8 @@ The run counts what the browser opens. It starts the app, puts a small proxy in 
 | Three views and sixty views of one note | the counts of streams, subscribe operations or requests differ between them, or a stream opens more than once |
 | Thirty views of thirty notes | more than one stream is open at once, the subscribe count isn't one per topic, or a command doesn't come back |
 | An event from another window | the record doesn't change, or the window makes a new request to get it |
+| An ended subscription the server allows again | the window doesn't ask again, the stream opens again, the window doesn't load again, or an event after it doesn't arrive (twice in a row) |
+| An ended subscription the server refuses | the app isn't told, is told more than once, the window asks more than once, or the window changes after the refusal |
 | A cut and a restored connection | the window changes while cut off, doesn't open the stream again, doesn't load again, or keeps an older record |
 
 ## Not covered

@@ -2,11 +2,11 @@ import { createCollection } from '@tanstack/db';
 import type { Collection, LoadSubsetOptions } from '@tanstack/db';
 import { stableKey } from './index.js';
 import type { AnySchema, Contract, ContractSpec } from '@builtbyfriends/realtime';
-import type { RecordName, RecordSpec } from './records.js';
-import { isEvent, isRow, newer, parse, readAnswer, resolveSubsets, topicsFor, watcher } from './records-shared.js';
+import type { RecordName, RecordSpec, Refusal } from './records.js';
+import { isEvent, isRow, newer, parse, readAnswer, resolveSubsets, refusalsOf, topicsFor, watcher } from './records-shared.js';
 import type { EventTransport, RecordsClient, Row, SubsetRequest, Watch } from './records-shared.js';
 
-export function recordStore<C extends ContractSpec>(contract: Contract<C>, name: string, spec: RecordSpec<C, RecordName<C>>, client: RecordsClient, transport: EventTransport | undefined) {
+export function recordStore<C extends ContractSpec>(contract: Contract<C>, name: string, spec: RecordSpec<C, RecordName<C>>, client: RecordsClient, transport: EventTransport | undefined, onRefused?: (refusal: Refusal) => void) {
   const found = contract.data[name];
 
   if (!found) {throw new Error(`${contract.name} has no record "${name}"`);}
@@ -18,6 +18,7 @@ export function recordStore<C extends ContractSpec>(contract: Contract<C>, name:
   const knownBy = new Map<string, Set<string>>();
   const label = `${contract.name}.${name}`;
   const synced = new Set<string>();
+  const refusals = refusalsOf(label, onRefused);
   const subsets = new Map<string, { count: number; stop: () => void }>();
   const watch = watcher(transport);
   let upsertRows: ((rows: ReadonlyArray<Row>) => void) | undefined;
@@ -151,12 +152,14 @@ export function recordStore<C extends ContractSpec>(contract: Contract<C>, name:
         const watches: Array<Watch> = [
           ...topicsFor(contract, spec.upserts, input).map(({ event, topic }) => ({
             topic,
+            refused: refusals.watching(topic),
             handle: (raw: unknown) => {
               if (isEvent(raw, event)) {void onEvent(event, raw).then(upsert).catch(reportError);}
             },
           })),
           ...topicsFor(contract, spec.removes ?? [], input).map(({ event, topic }) => ({
             topic,
+            refused: refusals.watching(topic),
             handle: (raw: unknown) => {
               if (isEvent(raw, event)) {void onEvent(event, raw).then((rows) => remove(rows.map(keyOf))).catch(reportError);}
             },
