@@ -5,9 +5,19 @@ import { pathToFileURL } from 'node:url';
 export const SNAPSHOT_NPM_TAG = 'snapshot';
 
 const OWN_PREFIX = '@builtbyfriends/realtime';
-const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
+const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const;
 
-type Manifest = Record<string, unknown> & { name: string; version: string; private?: boolean };
+type Dependencies = Record<string, string>;
+
+type Manifest = {
+  name: string;
+  version: string;
+  private?: boolean;
+  dependencies?: Dependencies;
+  devDependencies?: Dependencies;
+  peerDependencies?: Dependencies;
+  optionalDependencies?: Dependencies;
+};
 
 export function snapshotVersion(base: string, change: string, sha: string, baseIsReleased = false): string {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:-.+)?$/.exec(base);
@@ -29,13 +39,27 @@ export function snapshotVersion(base: string, change: string, sha: string, baseI
   return `${major}.${minor}.${baseIsReleased ? (patch ?? 0) + 1 : patch}-snap.${change}.g${sha.slice(0, 7)}`;
 }
 
+function isManifest(value: unknown): value is Manifest {
+  return typeof value === 'object' && value !== null && 'name' in value && typeof value.name === 'string' && 'version' in value && typeof value.version === 'string';
+}
+
+function readManifest(url: URL): Manifest {
+  const parsed: unknown = JSON.parse(readFileSync(url, 'utf8'));
+
+  if (!isManifest(parsed)) {
+    throw new Error(`${url.pathname} has no name and version.`);
+  }
+
+  return parsed;
+}
+
 export function withSnapshotVersion(manifest: Manifest, version: string): Manifest {
   const next: Manifest = { ...manifest, version };
 
   for (const field of DEPENDENCY_FIELDS) {
     const section = manifest[field];
 
-    if (section && typeof section === 'object') {
+    if (section) {
       next[field] = Object.fromEntries(
         Object.entries(section).map(([name, range]) => [name, name === OWN_PREFIX || name.startsWith(`${OWN_PREFIX}-`) ? version : range]),
       );
@@ -51,7 +75,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   const manifests = readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map(({ name }) => new URL(`${encodeURIComponent(name)}/package.json`, root))
-    .map((url) => ({ url, manifest: JSON.parse(readFileSync(url, 'utf8')) as Manifest }))
+    .map((url) => ({ url, manifest: readManifest(url) }))
     .filter(({ manifest }) => !manifest.private);
 
   const core = manifests.find(({ manifest }) => manifest.name === OWN_PREFIX);
