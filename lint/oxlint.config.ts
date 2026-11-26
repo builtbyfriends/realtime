@@ -63,13 +63,18 @@ export default defineConfig({
       },
     },
     {
+      // Decision: `publish` is the app's own function and can throw anything, so the error it throws reaches `onDeliveryFailed` as it came.
+      files: ['**/packages/core/src/contract-module.ts'],
+      rules: { 'anti-slop/no-unknown-parameters': 'off' },
+    },
+    {
       // Decision: Scripts, the command line tool and the demos print to the terminal on purpose.
       files: ['**/scripts/**', '**/packages/cli/**', '**/bwf/**'],
       rules: { 'no-console': 'off' },
     },
     {
       // Decision: These files report an error to the console when the app gives no handler of its own. The packages have no logger.
-      files: ['**/packages/core/src/registry.ts', '**/packages/live/src/index.ts', '**/packages/data/src/deployment.ts', '**/packages/data/src/sockets.ts'],
+      files: ['**/packages/core/src/registry.ts', '**/packages/core/src/contract-module.ts', '**/packages/live/src/index.ts', '**/packages/data/src/deployment.ts', '**/packages/data/src/sockets.ts'],
       rules: { 'no-console': 'off' },
     },
   ],

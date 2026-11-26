@@ -241,8 +241,21 @@ owner's SQLite right after the handler, then delivered, and removed once `publis
 the outbox sets the object's alarm, and the owner's `alarm()` calls `module.events.deliver(env)` to try again. Delivery is then at
 least once, so a listener has to cope with the same event twice, such as by keying on the record's id. Delivery stops at the first
 event that fails and tries again later, so order is kept, and an event that can never be delivered holds the ones behind it. The
-place to look is the `_realtime_outbox` table in the owner's SQLite. There's no give-up count for now: that's an assumption, to
-change once a stuck event is seen.
+place to look is the `_realtime_outbox` table in the owner's SQLite.
+
+Retries are spaced by the outbox, not by the module. `storageOutbox` sets the alarm `retryAfterMs` ahead (30 seconds unless you pass
+another) when a delivery fails, unless an earlier alarm is already set, and the next try runs when the owner's `alarm()` calls
+`events.deliver(env)`. The wait doesn't grow, and nothing stops the tries: an event is tried every 30 seconds until `publish` takes
+it. There's no give-up count for now: that's an assumption, to change once a stuck event is seen. `memoryOutbox` sets no alarm, so
+its events are tried again on the next command or the next `events.deliver`.
+
+A failure is never silent. Pass `onDeliveryFailed(failure, env)` to `implementContract(...).with({...})` and it's called each time
+`publish` throws for an event, with `failure.event`, `failure.error`, `failure.attempt` (how many times this event has failed as
+this isolate has seen it, so it starts again from 1 after a restart) and `failure.retrying` (true when an outbox keeps the event).
+Without an outbox the event is gone, and the hook is called once with `retrying: false`. Without the hook, each failure goes to
+`console.warn` with the event, its topic and the error. The hook runs after the next try is asked for, and an error from it is
+logged and goes no further, so it can't lose the event. `contractChecks` breaks delivery on purpose to check the outbox, so its runs
+print those warnings.
 
 A contract can be served from more than one place, such as each record's owner for writes and a shared index for a list across
 owners. Each place gives a handler for the commands it serves and a reason for the rest: `list: { reason: 'The index serves it' }`.

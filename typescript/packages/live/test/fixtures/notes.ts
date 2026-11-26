@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { bearerAuth, defineContract, defineRegistry, implementContract, memoryOutbox, memoryRunOnce } from '@builtbyfriends/realtime';
-import type { ContractEvent, RecordOf } from '@builtbyfriends/realtime';
+import type { ContractEvent, DeliveryFailure, RecordOf } from '@builtbyfriends/realtime';
 import { defineRecords } from '../../src/records.js';
 import { fakeBackend } from '../../src/records-testing.js';
 
@@ -116,7 +116,7 @@ const apiToken = bearerAuth<{ id: string; via?: string }, Env>({
   viaOf: (c) => c.via,
 });
 
-export function notesWorld(onEvent?: (event: ContractEvent) => void) {
+export function notesWorld(onEvent?: (event: ContractEvent) => void | Promise<void>, onDeliveryFailed?: (failure: DeliveryFailure) => void) {
   const store = new NoteStore();
 
   const module = implementContract(notes).with({
@@ -125,8 +125,10 @@ export function notesWorld(onEvent?: (event: ContractEvent) => void) {
     analytics: { reason: 'A test fixture' },
     publish: (event) => {
       store.feed.push(event);
-      onEvent?.(event);
+
+      return onEvent?.(event);
     },
+    onDeliveryFailed,
     runOnce: memoryRunOnce(),
     outbox: memoryOutbox(),
     commands: {

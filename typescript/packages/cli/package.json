@@ -1,6 +1,6 @@
 {
   "name": "@builtbyfriends/realtime-cli",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Command line client for an realtime Worker, driven by its manifest",
   "type": "module",
   "bin": {
@@ -21,7 +21,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@builtbyfriends/realtime": "0.10.0"
+    "@builtbyfriends/realtime": "0.10.1"
   },
   "repository": {
     "type": "git",
