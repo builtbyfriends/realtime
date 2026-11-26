@@ -5,6 +5,10 @@ import type { State } from './builder.js';
 import { fieldsOf, isRecord, typeOf, wordsAt } from './json-schema.js';
 import type { CallResult, Registry } from './registry.js';
 import { validate } from './schema.js';
+import { expectCode, expectOk, shown, stateOf, walkChecks } from './contract-walk.js';
+import type { ContractCheck, PropertySettings } from './contract-walk.js';
+
+export type { ContractCheck, PropertySettings } from './contract-walk.js';
 
 type Errors<C extends ContractSpec, K extends CommandName<C>> = keyof C['commands'][K]['errors'] & string;
 
@@ -20,6 +24,8 @@ export type ContractFixtures<C extends ContractSpec> = {
   };
   /** Makes `publish` throw until the function it gives back is called. The delivery check needs it when a place has an outbox. */
   breakDelivery?: () => () => void;
+  /** How many random runs of commands to try, and the `seed` and `path` of a failure to run again. */
+  properties?: PropertySettings;
   /** For each listed failure of each command, an input that causes it. */
   causes: {
     [K in CommandName<C> as [Errors<C, K>] extends [never] ? never : K]: {
@@ -31,9 +37,6 @@ export type ContractFixtures<C extends ContractSpec> = {
 /** What `contractChecks(...places)` gives back: `with` takes the fixtures and lists the checks. */
 export type ContractChecker<C extends ContractSpec> = { with(fixtures: ContractFixtures<C>): Array<ContractCheck> };
 
-/** One check. Each runs on its own, so a test runner can list them, as in `for (const c of checks) it(c.name, c.run)`. */
-export type ContractCheck = { name: string; run: () => Promise<void> };
-
 type Sent = State['inRaw'];
 
 type LooseModule = { contract: Contract; procedures: ReadonlyArray<{ name: string }>; events: ModuleEvents };
@@ -43,6 +46,7 @@ type LooseFixtures = {
   env?: unknown;
   callerWith: (capabilities: ReadonlyArray<string>) => Request;
   breakDelivery?: () => () => void;
+  properties?: PropertySettings;
   arrange: Readonly<Record<string, (state?: string) => Sent | Promise<Sent>>>;
   causes: Readonly<Record<string, Readonly<Record<string, () => Sent | Promise<Sent>>>>>;
 };
@@ -50,8 +54,6 @@ type LooseFixtures = {
 type LooseChecker = { with(fixtures: LooseFixtures): Array<ContractCheck> };
 
 type Observed = { result: CallResult; events: Array<ContractEvent> };
-
-const shown = (r: CallResult) => (r.ok ? `ok ${JSON.stringify(r.value)}` : `${r.status} ${r.code}: ${r.message}${r.issues ? ` ${JSON.stringify(r.issues)}` : ''}`);
 
 function wrongValueFor(type: string | null): string | number | null {
   switch (type) {
@@ -103,6 +105,20 @@ class Run {
     this.callers.set(key, request);
 
     return request;
+  }
+
+  serves(command: string): boolean {
+    return this.placeOf(command) !== undefined;
+  }
+
+  expectEmits(label: string, cmd: CommandSpec, events: ReadonlyArray<ContractEvent>): void {
+    for (const e of cmd.emits ?? []) {
+      const sent = events.filter((x) => x.name === e);
+
+      if (!sent.length) {throw new Error(`${label}: succeeded without emitting "${e}", which it lists in emits. Emit it, or take it out of emits.`);}
+
+      this.expectTopics(label, e, sent);
+    }
   }
 
   topicCount(event: string): number {
@@ -171,21 +187,6 @@ class Run {
   }
 }
 
-function expectOk(label: string, r: CallResult): asserts r is Extract<CallResult, { ok: true }> {
-  if (!r.ok) {throw new Error(`${label}: expected success, got ${shown(r)}. Check the handler, or the arrange fixture's input.`);}
-}
-
-function expectCode(label: string, r: CallResult, code: string, hint: string): void {
-  if (r.ok || r.code !== code) {throw new Error(`${label}: expected ${code}, got ${shown(r)}. ${hint}`);}
-}
-
-function stateOf(contract: Contract, result: Extract<CallResult, { ok: true }>): string {
-  const field = contract.states?.field ?? '';
-  const value = result.value;
-
-  return isRecord(value) ? String(value[field]) : '';
-}
-
 function goodChecks(run: Run, name: string, cmd: CommandSpec): Array<ContractCheck> {
   const label = `${run.contract.name}.${name}`;
   const move = cmd.move === undefined ? undefined : run.contract.states?.moves[cmd.move];
@@ -197,14 +198,7 @@ function goodChecks(run: Run, name: string, cmd: CommandSpec): Array<ContractChe
         const { result, events } = await run.once(name, run.send(cmd, await run.goodInput(name, move?.from[0])));
 
         expectOk(label, result);
-
-        for (const e of cmd.emits ?? []) {
-          const sent = events.filter((x) => x.name === e);
-
-          if (!sent.length) {throw new Error(`${label}: succeeded without emitting "${e}", which it lists in emits. Emit it, or take it out of emits.`);}
-
-          run.expectTopics(label, e, sent);
-        }
+        run.expectEmits(label, cmd, events);
       },
     },
   ];
@@ -437,7 +431,8 @@ function deliveryChecks(run: Run, name: string, cmd: CommandSpec): Array<Contrac
 
 /**
  * Checks a build of a module against its contract from the outside, through the registry: each command with good and bad input, a
- * caller without the capability, a repeated requestId, each listed move, each unlisted move and each listed failure.
+ * caller without the capability, a repeated requestId, each listed move, each unlisted move and each listed failure. Then it tries
+ * random runs of commands made from the contract (see `properties`), and a failure prints the seed that runs it again.
  *
  * Pass each place that serves part of the contract, so the whole contract is checked once. A place with an outbox also gets a check
  * that a failed delivery is kept and tried again.
@@ -458,7 +453,7 @@ export function contractChecks(place: LooseModule, ...others: Array<LooseModule>
     with(fixtures) {
       const run = new Run(places, contract, fixtures);
 
-      return Object.entries(contract.commands).flatMap(([name, cmd]) => run.placeOf(name) ? [
+      const each = Object.entries(contract.commands).flatMap(([name, cmd]) => run.placeOf(name) ? [
         ...goodChecks(run, name, cmd),
         ...badInputChecks(run, name, cmd),
         ...capabilityChecks(run, name, cmd),
@@ -467,6 +462,8 @@ export function contractChecks(place: LooseModule, ...others: Array<LooseModule>
         ...causeChecks(run, name, cmd),
         ...deliveryChecks(run, name, cmd),
       ] : servedChecks(run, name));
+
+      return [...each, ...walkChecks(run, fixtures.properties)];
     },
   };
 }

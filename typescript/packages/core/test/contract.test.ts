@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { DatabaseSync } from 'node:sqlite';
 import { contractChecks, contractDocs, defineContract, defineRegistry, implementContract, memoryOutbox, memoryRunOnce, storageOutbox, storageRunOnce } from '@builtbyfriends/realtime';
-import type { CommandArgs, ContractEvent, EventOutbox, OutboxStorage, RunOnceStorage, RunOnceStore } from '@builtbyfriends/realtime';
+import type { CommandArgs, ContractEvent, EventOutbox, OutboxStorage, PropertySettings, RunOnceStorage, RunOnceStore, Settled } from '@builtbyfriends/realtime';
 
 const states = ['draft', 'sent'] as const;
 const Note = z.object({ id: z.string(), body: z.string(), state: z.enum(states) });
@@ -57,7 +57,7 @@ type Mistakes = {
 
 type Caller = { id: string; caps: ReadonlyArray<string> };
 
-function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce()) {
+function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce(), properties?: PropertySettings) {
   const store = new Map<string, Note>();
   let seq = 0;
 
@@ -128,6 +128,7 @@ function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce())
 
   const checks = contractChecks(observed, ...others).with({
     registry,
+    properties,
     breakDelivery: mistakes.noBreakDelivery
       ? undefined
       : () => {
@@ -153,10 +154,25 @@ function build(mistakes: Mistakes = {}, runOnce: RunOnceStore = memoryRunOnce())
   return { module, registry, checks, callers, delivered };
 }
 
-async function failures(mistakes: Mistakes): Promise<Array<string>> {
+function latestOnly(): RunOnceStore {
+  let last: { key: string; result: Promise<Settled> } | undefined;
+
+  return {
+    run(key, _keepMs, start) {
+      if (last?.key === key) {return last.result;}
+
+      const result = start();
+      last = { key, result };
+
+      return result;
+    },
+  };
+}
+
+async function failures(mistakes: Mistakes, runOnce?: RunOnceStore, properties?: PropertySettings): Promise<Array<string>> {
   const failed: Array<string> = [];
 
-  for (const check of build(mistakes).checks) {
+  for (const check of build(mistakes, runOnce, properties).checks) {
     try {
       await check.run();
     } catch (error) {
@@ -316,8 +332,8 @@ describe('storageRunOnce', () => {
   });
 
   it('passes the retry checks', async () => {
-    const retries = build({}, storageRunOnce(sqliteStorage())).checks.filter((c) => c.name.includes('runs once'));
-    expect(retries).toHaveLength(4);
+    const retries = build({}, storageRunOnce(sqliteStorage())).checks.filter((c) => c.name.includes('requestId'));
+    expect(retries).toHaveLength(5);
 
     for (const check of retries) {await check.run();}
   });
@@ -393,9 +409,29 @@ describe('contractChecks', () => {
   });
 
   it('names the check and what to change when a build skips the state list', async () => {
-    expect(await failures({ skipMove: true })).toEqual([
-      'notes.send refuses send from sent: notes.send from sent: expected MOVE_NOT_ALLOWED, got ok {"id":"n-10","body":"Hello","state":"sent"}. The contract doesn\'t list send from sent: call move(current) in the handler.',
-    ]);
+    const [byState, random, ...rest] = await failures({ skipMove: true }, undefined, { seed: 42 });
+    expect(rest).toEqual([]);
+    expect(byState).toMatch(/^notes.send refuses send from sent: notes.send from sent: expected MOVE_NOT_ALLOWED, got ok \{"id":"n-\d+","body":"Hello","state":"sent"\}. The contract doesn't list send from sent: call move\(current\) in the handler.$/);
+    expect(random).toMatch(/^notes stays inside its moves .*: notes.send on record #\d in (sent|draft): expected MOVE_NOT_ALLOWED/);
+    expect(random).toMatch(/Steps: .*send #\d\./);
+    expect(random).toMatch(/Run this case again with properties: \{ seed: 42, path: '[\d:]+' \}/);
+  });
+
+  it('finds a requestId answered again after other commands ran, where a back-to-back repeat passes', async () => {
+    const [random, ...rest] = await failures({}, latestOnly(), { seed: 42 });
+    expect(rest).toEqual([]);
+    expect(random).toMatch(/^notes stays inside its moves and answers a repeated requestId the same, over random runs of commands: notes.(write|send) sent again with its requestId: got .*, not the first answer/);
+    expect(random).toMatch(/Steps: .*again #/);
+  });
+
+  it('runs a failed case again from the seed and path it printed', async () => {
+    const [first = ''] = await failures({}, latestOnly(), { seed: 7 });
+    const seed = Number(/seed: (-?\d+)/.exec(first)?.[1]);
+    const path = /path: '([\d:]+)'/.exec(first)?.[1] ?? '';
+    const steps = (text: string) => /Records started in: .*Steps: .*\./.exec(text)?.[0];
+    const [again = ''] = await failures({}, latestOnly(), { seed, path });
+    expect(steps(again)).toBe(steps(first));
+    expect(again).toContain(`seed: ${seed}, path: '${path}'`);
   });
 
   it('fails a build that leaves out a listed event', async () => {
@@ -430,6 +466,7 @@ describe('contractChecks', () => {
       'notes.send moves send: draft -> sent',
       'notes.send refuses send from sent',
       'notes.send fails with NOT_FOUND',
+      'notes stays inside its moves and answers a repeated requestId the same, over random runs of commands',
     ]);
   });
 });

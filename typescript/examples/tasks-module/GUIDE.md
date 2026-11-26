@@ -24,6 +24,8 @@ A task is open, doing or done. `start` moves it from open to doing, `finish` fro
 - Events go out after the handler returns, and only when it succeeds. `created` goes out on two topics: the task's own and its creator's.
 - The owner keeps each event in its outbox until the feed takes it. When the feed is down, the event waits and goes out on the next call, or when the owner's alarm calls `events.deliver(env)`. A listener can get the same event twice.
 - Each place gives a handler for the commands it serves and a reason for the rest. `contractChecks(owner, index)` checks the whole contract across both.
+- `contractChecks` also tries random runs of `start`, `finish`, `reopen`, `create` and `remove`, with repeats of earlier requests mixed in. A failure prints a seed and a path to pass back as `properties: { seed, path }`.
+- `test/properties.test.ts` adds one property the contract can't say: a created task reads back with its title, trimmed.
 - The tasks live in memory, so they go when the Worker restarts. A real module keeps them with its own Durable Object.
 
 ## Check it
