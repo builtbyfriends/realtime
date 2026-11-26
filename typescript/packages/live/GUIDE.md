@@ -109,6 +109,7 @@ Where it had already moved, for the next bump:
 - An optimistic change on a record that isn't loaded fails inside TanStack DB. Guard it with `Note.has(id)`, as above.
 - The versions seen, the keys each read loaded and each view handle are kept in memory and only cleared when the collection is cleaned up. For a window with a few thousand records that's small. Clear them per subset when that stops being true.
 - A removed record's version is gone once the collection is cleaned up.
+- Thirty views of thirty different notes make thirty `get` requests at once, one for each view, and a browser queues them behind its six connections to a host. They finish and a command still comes back, but a screen with that many views of different records would do better to read them with one list. Loading them in one request is a later job, tracked in DED-560.
 - When a subscribe call fails, the listeners of that topic stay with nothing feeding them until something else subscribes to the topic or a reconnect loads again. The error is logged. If this shows up in real use, the fix is to subscribe again on reconnect.
 
 ## Assumptions for later

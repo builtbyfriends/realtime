@@ -111,14 +111,17 @@ export class NoteStore {
 
 const apiToken = bearerAuth<{ id: string }, Env>({ name: 'token', verify: (token) => (token === 'ok' ? { id: 'u-1' } : null), actorId: (c) => c.id });
 
-export function notesWorld() {
+export function notesWorld(onEvent?: (event: ContractEvent) => void) {
   const store = new NoteStore();
 
   const module = implementContract(notes).with({
     auth: apiToken,
     can: () => true,
     analytics: { reason: 'A test fixture' },
-    publish: (event) => void store.feed.push(event),
+    publish: (event) => {
+      store.feed.push(event);
+      onEvent?.(event);
+    },
     runOnce: memoryRunOnce(),
     outbox: memoryOutbox(),
     commands: {

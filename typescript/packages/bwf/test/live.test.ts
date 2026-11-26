@@ -27,6 +27,7 @@ function fakeHost() {
   };
   return {
     connect,
+    deliver: (topic: string, event: unknown) => subs.get(topic)?.forEach((cb) => cb(event)),
     publish: (topic: string) => subs.get(topic)?.forEach((cb) => cb({ topic, type: 'changed', data: null })),
     count: (topic: string) => subs.get(topic)?.size ?? 0,
     sources: () => sources,
@@ -112,6 +113,24 @@ describe('bwfTransport', () => {
     refuse = false;
     await t.subscribe('x', () => {});
     expect(v.count('x')).toBe(1);
+  });
+
+  it('passes a module event out of bwf\'s envelope, and names a bare payload by the envelope type', async () => {
+    const v = fakeHost();
+    const t = bwfTransport({ connect: v.connect });
+    const got = vi.fn();
+    await t.subscribe('x', got);
+    const sent = { module: 'notes', name: 'renamed', event: 'notes.renamed', topic: 'x', payload: { id: 'n-1' } };
+    v.deliver('x', { subscriptionId: 'x', topic: 'x', type: 'renamed', data: sent });
+    v.deliver('x', { subscriptionId: 'x', topic: 'x', type: 'renamed', data: { id: 'n-2' } });
+    v.deliver('x', { subscriptionId: 'x', topic: 'x', type: 'renamed', data: { payload: 'text' } });
+    v.deliver('x', { subscriptionId: 'x', topic: 'x', type: 'changed', data: null });
+    expect(got.mock.calls.map(([event]) => event)).toEqual([
+      sent,
+      { name: 'renamed', topic: 'x', payload: { id: 'n-2' } },
+      { name: 'renamed', topic: 'x', payload: { payload: 'text' } },
+      { subscriptionId: 'x', topic: 'x', type: 'changed', data: null },
+    ]);
   });
 
   it('reports a reconnect only for opens after the first', async () => {

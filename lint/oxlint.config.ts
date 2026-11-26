@@ -54,6 +54,15 @@ export default defineConfig({
       },
     },
     {
+      // Decision: bwf delivers a live event as unknown, and this adapter checks only enough of its shape to take the module's event out of the envelope. The schema check happens later, in records.
+      files: ['**/packages/bwf/src/live.ts'],
+      rules: {
+        'anti-slop/no-runtime-typeof': 'off',
+        'anti-slop/no-unknown-parameters': 'off',
+        'quality/no-unknown-returns': 'off',
+      },
+    },
+    {
       // Decision: Scripts, the command line tool and the demos print to the terminal on purpose.
       files: ['**/scripts/**', '**/packages/cli/**', '**/bwf/**'],
       rules: { 'no-console': 'off' },

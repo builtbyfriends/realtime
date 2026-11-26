@@ -1,5 +1,14 @@
 # Changes
 
+## 0.9.2
+
+- bwf's transport gives live records the event a module published. bwf delivers it inside an envelope (`{ subscriptionId, topic, type, data }`), and records read the envelope as the record, so every live event failed the contract check and the window only changed when it loaded again. The unit tests missed it because their fake hands over the module's event as it is. A browser run against a real bwf stream found it. The transport now passes `data` when it holds a module event, names a bare payload by the envelope's `type`, and leaves anything else as it was.
+- New: `bwf/live-e2e`, a small bwf app and a Chromium run (`npm test` there, and a `live-browser` job in CI). It runs live records on the real bwf transport and counts what the browser opens:
+  - Three views and sixty views of one note open one stream, send two subscribe operations and make two requests for the same counts.
+  - Thirty views of thirty notes keep to one stream and one subscription for each topic, and a command comes back while they're open.
+  - An event another window caused changes the record and makes no new request.
+  - A cut connection that comes back loads again and leaves the newest record.
+
 ## 0.9.1
 
 - Live records keep one subscription for each topic. Before, a record with three events and a view on the same topic opened four, and with a transport that opens a stream for each subscription a browser ran out of its six connections to a host, so commands waited behind them. Every collection and view of one transport now shares one subscription for each topic and one reconnect listener, and the subscription ends when the last listener goes. A test counts them. bwf's transport already shared one subscription for each topic.
