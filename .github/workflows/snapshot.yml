@@ -71,7 +71,13 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/github-packages.npmrc
-        run: for dir in packages/*/; do npm publish --workspace "$dir" --tag "${{ steps.snapshot.outputs.npm-tag }}"; done
+        run: |
+          for dir in packages/*/; do
+            if [ "$(node -p "Boolean(require('./$dir/package.json').private)")" = true ]; then
+              continue
+            fi
+            npm publish --workspace "$dir" --tag "${{ steps.snapshot.outputs.npm-tag }}"
+          done
       - name: Say which version to pin
         env:
           VERSION: ${{ steps.snapshot.outputs.version }}
@@ -112,6 +118,13 @@ jobs:
             gh api --paginate --slurp "orgs/${GITHUB_REPOSITORY%%/*}/packages/npm/$package/versions?per_page=100" \
               --jq "flatten | map(select(.name | contains(\"-snap.\")) | select(.created_at < \"$cutoff\") | .id) | .[]" \
               | while read -r id; do
-                  gh api -X DELETE "orgs/${GITHUB_REPOSITORY%%/*}/packages/npm/$package/versions/$id" || true
+                  if ! gh api -X DELETE "orgs/${GITHUB_REPOSITORY%%/*}/packages/npm/$package/versions/$id" >/dev/null; then
+                    echo "::warning::Could not delete $package version $id. The token may lack the right to delete packages."
+                    echo "failed" >> "$RUNNER_TEMP/failed"
+                  fi
                 done
           done
+          if [ -s "$RUNNER_TEMP/failed" ]; then
+            echo "$(wc -l < "$RUNNER_TEMP/failed") snapshot versions could not be deleted." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
