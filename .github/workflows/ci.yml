@@ -51,9 +51,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+      - name: Install what the packages' source needs (the app reads it from this repository, not from npm)
+        run: bun install --frozen-lockfile
+        working-directory: typescript
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - name: Run live records in Chromium on a real bwf stream
