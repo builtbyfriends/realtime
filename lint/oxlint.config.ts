@@ -36,7 +36,21 @@ export default defineConfig({
         'typescript/no-unsafe-member-access': 'off',
         'typescript/no-unsafe-return': 'off',
         'typescript/no-unsafe-type-assertion': 'off',
+        'anti-slop/require-safety-comment-for-type-assertion': 'off',
         'unicorn/consistent-function-scoping': 'off',
+      },
+    },
+    {
+      // Decision: These files take what comes over the wire, a published event or a command's answer, and check it with the
+      // contract's own schemas before anything uses it. The input is unknown on purpose until that check runs, and the
+      // packages have no logger, so a failed event goes to the console.
+      files: ['**/packages/live/src/records.ts', '**/packages/live/src/records-testing.ts'],
+      rules: {
+        'anti-slop/no-runtime-typeof': 'off',
+        'anti-slop/no-unknown-parameters': 'off',
+        'no-console': 'off',
+        'quality/no-unknown-returns': 'off',
+        'quality/no-unsafe-dictionary-type': 'off',
       },
     },
     {

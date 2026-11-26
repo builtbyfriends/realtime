@@ -1,0 +1,115 @@
+# Live records in a window
+
+A window gets a module's records live, typed from the contract, with one copy of each record. It changes them through the contract's commands, and a retry runs once. A feature writes a few lines for this and no plumbing.
+
+This is the `records` part of `@builtbyfriends/realtime-live`. The older `createLive` layer, which tells a query it may be stale and asks again, sits next to it and still works. Pick one per feature.
+
+## What a feature writes
+
+Say what the module's records look like to the window, once, next to the feature:
+
+```ts
+export const noteRecords = defineRecords(notes, {
+  records: {
+    Note: {
+      key: 'id',
+      version: 'updatedAt',
+      reads: { list: { boardId: 'boardId' }, get: { id: 'id' } },
+      upserts: ['renamed'],
+      removes: ['removed'],
+    },
+  },
+  commands: {
+    rename: { answers: 'Note', optimistic: ({ id, title }, { Note }) => Note.has(id) && Note.update(id, (d) => void (d.title = title)) },
+    remove: { removes: 'Note', optimistic: ({ id }, { Note }) => Note.has(id) && Note.delete(id) },
+  },
+  views: { can: { events: ['renamed'], commands: ['rename'] } },
+});
+```
+
+- `key` is the field that names a record. `version` is a field that gets bigger when the record changes. It's how a late or repeated event does no harm: a record only moves forward.
+- `reads` lists the read commands that load the record, and which input field matches which record field. A list read takes `{ boardId }`, so a query for `boardId = 'b-1'` calls it.
+- `upserts` lists events whose payload is the record after the change. `removes` lists events that carry the key of a record that's gone.
+- A command with `answers` puts its answer into the collection. One with `removes` deletes the record named in its answer. `optimistic` shows the change at once, and it's undone when the command fails.
+
+Then draw it:
+
+```tsx
+const { collections, commands } = useRecords(noteRecords);
+const notes = useLiveQuery({ query: (q) => q.from({ n: collections.Note }).where(({ n }) => eq(n.boardId, boardId)) });
+const one = useLiveQuery({ query: (q) => q.from({ n: collections.Note }).where(({ n }) => eq(n.id, id)) });
+const can = useView(noteRecords, 'can', { id });
+
+const intent = commands.rename({ id, title });
+const result = await intent.result;
+if (!result.ok) { /* result.error.code is a code the contract lists for rename */ }
+```
+
+The shell puts a `RecordsProvider` above the features, with the client and the event transport, once:
+
+```tsx
+<RecordsProvider client={client} transport={bwfTransport({ connect })}>
+```
+
+The list and the single view hold the same record. Rename it and both change in the same tick. If the command fails, both change back.
+
+## How it works
+
+- **One collection per record type.** It holds each record once, by `key`. It loads on demand: a query for `boardId = 'b-1'` calls the read that matches, and listens to the topics that read's input fills in. When the last query for it goes away, it stops listening.
+- **Events carry the record.** The window applies the payload, checked against the contract. It listens to the topics of the events you list, filled from the read's input. A topic is used when all of its fields are in that input.
+- **Newer wins.** A record only replaces one with a smaller `version`. A removed record leaves its version behind, so an older update can't bring it back.
+- **A reconnect loads again.** Every watched read runs again. A list read also drops the records it no longer lists.
+- **A command is one intent.** `commands.rename(input)` makes one request id and gives it back as `requestId`. Pass `{ requestId }` as the second argument to retry: the module answers with the first result and runs nothing twice. The answer goes into the collection before the command settles.
+- **Answers and events are checked** against the contract's schemas where they come in. A mismatch fails the load and is logged for an event. It's on in production too, since the cost is a schema parse per message. Turn it off only if it shows up in a profile.
+- **Errors are typed.** `result.error.code` is one of the codes the command lists, plus the codes the pipeline adds (`UNAUTHENTICATED`, `FORBIDDEN`, `INVALID_INPUT`, `INTERNAL`). A `switch` on it is checked by the compiler.
+
+## What may I do now
+
+A read that depends on who's asking sits beside the record as a view, because it isn't a property of the record. `useView(noteRecords, 'can', { id })` calls the read and keeps the answer. It loads again when:
+
+- an event named in `views.can.events` arrives on a topic whose fields are all in the read's input,
+- a command named in `views.can.commands` settles, or
+- the connection comes back.
+
+A view listens only while a component uses it. If a change can't be seen from either an event or a command of this window, the answer can be stale until the next one of those. A screen that needs it sooner calls `refresh()` on the handle (`runtime.views.can(input).refresh()`).
+
+## Tests and the dev page
+
+`fakeBackend` from `@builtbyfriends/realtime-live/records/testing` runs a real module in the same process. Give it the registry and the module, and use its `client` and `transport` in the provider. Commands go through the module's own auth, schema checks, handlers and request id store, so a feature's test needs no backend. `deliver(event)` sends an event by hand, `reconnect()` simulates a drop, and `listenerCount()` shows what's still listening.
+
+## Size
+
+The records code is small: about 250 lines of ours. TanStack DB is not. Measured on 2026-11-26 with esbuild, minified and gzipped, with React and Realtime left out:
+
+| Entry | Gzipped |
+| --- | --- |
+| `@builtbyfriends/realtime-live` (the older layer) | about 2 KB |
+| `@builtbyfriends/realtime-live/records` | about 39 KB |
+| `@builtbyfriends/realtime-live/records/react` (adds live queries) | about 85 KB |
+
+An app that only imports the older layer doesn't bundle any of it. TanStack DB still installs, because it is a dependency of the package.
+
+## Version
+
+The records part is built on TanStack DB `1.0.0-rc.1.5` and `@tanstack/react-db` `1.0.0-rc.1.5`, both pinned exactly, read on 2026-11-26. It's pre-1.0, so move the pin on purpose and run the tests.
+
+Where it had already moved, for the next bump:
+
+- The package's bundled skill pages describe 0.6.17. `isPersisted.promise` on a transaction is gone; use `tx.when('settled')`.
+- A collection's `gcTime: 0` turns garbage collection off, it doesn't mean "at once". A test that needs a query to let go uses `gcTime: 1`.
+- A transaction with no change to show is never persisted, so its `mutationFn` doesn't run. `commands` sends the command itself in that case, otherwise a rename of a record that isn't loaded would do nothing.
+- A sync commit made while a command is out is held until the command settles, then applied with the end of the optimistic change, so the screen doesn't flicker.
+- A row from `collection.get` carries extra `$`-prefixed fields.
+
+## What it can't do, or does badly
+
+- A query it has no read for throws. A query on `title` for a list read that only takes `boardId` is a mistake in the feature, and the message says which fields it saw. Only `eq` filters map to reads.
+- An optimistic change on a record that isn't loaded fails inside TanStack DB. Guard it with `Note.has(id)`, as above.
+- A record's version is kept in memory. After the collection is cleaned up and loaded again, a removed record's version is gone.
+
+## Assumptions for later
+
+- **Paging.** The Thread screen doesn't need it. A list read returns everything in its scope. TanStack DB passes limits and cursors to a read when it's on demand, so adding it should mean a read with `limit` and `cursor` inputs and a line in the spec.
+- **Offline writes and saving across restarts.** Not part of this. TanStack DB has persistence and an offline queue for them.
+- **Catching up from a position.** The older sync path (change index and sync sockets) can ask for what happened after a position, which loads less than a full read after a drop. This layer loads again in full. Worth taking later when a list gets long.
+- **Joins across modules.** Live queries can join two modules' collections, so a screen can show a thread with its ask without one feature reaching into the other. It's not shown in a test yet.
