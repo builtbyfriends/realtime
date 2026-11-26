@@ -1,6 +1,6 @@
 import { createLiveQueryCollection, eq } from '@tanstack/db';
 import fc from 'fast-check';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ContractEvent } from '@builtbyfriends/realtime';
 import { createRuntime, defineRecords } from '../src/records.js';
 import type { EventTransport } from '../src/records.js';
@@ -268,6 +268,77 @@ describe('subscriptions', () => {
     await one.cleanup();
     await settle();
     expect(world.backend.listenerCount()).toBe(0);
+  });
+});
+
+describe('when the server ends a subscription and refuses it again', () => {
+  function refusing() {
+    const world = notesWorld();
+    const refusals: Array<{ name: string; topic: string; message: string }> = [];
+
+    const runtime = createRuntime(noteRecords, {
+      client: world.backend.client,
+      transport: world.backend.transport,
+      onRefused: ({ name, topic, error }) => void refusals.push({ name, topic, message: error.message }),
+    });
+
+    const one = (id: string) => createLiveQueryCollection({ query: (q) => q.from({ n: runtime.collections.Note }).where(({ n }) => eq(n.id, id)) });
+
+    return { world, runtime, refusals, one };
+  }
+
+  it('tells the app once for the record and topic, keeps the rows, and stops applying events', async () => {
+    const t = refusing();
+    const a = t.world.store.add('n-1', 'b-1', 'First');
+    const one = t.one('n-1');
+    await one.preload();
+    t.world.backend.refuse('notes:n-1');
+    t.world.backend.refuse('notes:n-1');
+    await settle();
+    expect(t.refusals).toEqual([{ name: 'notes.Note', topic: 'notes:n-1', message: 'FORBIDDEN' }]);
+    expect(one.toArray.map((n) => n.title)).toEqual(['First']);
+    t.world.backend.deliver(renamed(a, 'After', t.world.store.stamp(), 'notes:n-1'));
+    await settle();
+    expect(one.toArray.map((n) => n.title)).toEqual(['First']);
+  });
+
+  it('tells the app again after the record starts listening to the topic again', async () => {
+    const t = refusing();
+    t.world.store.add('n-1', 'b-1', 'First');
+    const first = t.one('n-1');
+    await first.preload();
+    t.world.backend.refuse('notes:n-1', new Error('FORBIDDEN'));
+    await first.cleanup();
+    await settle();
+    const again = t.one('n-1');
+    await again.preload();
+    await settle();
+    expect(t.world.backend.listenerCount('notes:n-1')).toBe(1);
+    t.world.backend.refuse('notes:n-1', new Error('GONE'));
+    expect(t.refusals.map((r) => r.message)).toEqual(['FORBIDDEN', 'GONE']);
+  });
+
+  it('warns in the console when the app gave no hook', async () => {
+    const world = notesWorld();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const runtime = createRuntime(noteRecords, { client: world.backend.client, transport: world.backend.transport });
+    world.store.add('n-1', 'b-1', 'First');
+    await createLiveQueryCollection({ query: (q) => q.from({ n: runtime.collections.Note }).where(({ n }) => eq(n.id, 'n-1')) }).preload();
+    world.backend.refuse('notes:n-1');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain('notes.Note');
+    warn.mockRestore();
+  });
+
+  it('puts a view that listens to the topic into its error state, with the data it had', async () => {
+    const t = refusing();
+    t.world.store.add('n-1', 'b-1', 'First');
+    const view = t.runtime.views.can({ id: 'n-1' });
+    const stop = view.subscribe(() => {});
+    await settle();
+    t.world.backend.refuse('notes:n-1', new Error('FORBIDDEN'));
+    expect(view.getSnapshot()).toMatchObject({ status: 'error', data: { rename: true }, error: { message: 'FORBIDDEN' } });
+    stop();
   });
 });
 

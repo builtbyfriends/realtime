@@ -52,6 +52,10 @@ export function viewStore<C extends ContractSpec>(
     function start() {
       const watches = topicsFor(contract, spec.events ?? [], input).map(({ event, topic }) => ({
         topic,
+        refused: (error: Error) => {
+          generation += 1;
+          set({ status: 'error', data: state.data, error });
+        },
         handle: (raw: unknown) => {
           if (isEvent(raw, event)) {again();}
         },

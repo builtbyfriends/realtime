@@ -21,14 +21,19 @@ const client: RecordsClient = {
 
 const errors: Array<string> = [];
 const events: Array<unknown> = [];
+const refusals: Array<{ name: string; topic: string; code: string | undefined; message: string }> = [];
 const inner = bwfTransport({ connect: connectLiveStream, url: '/live', retryDelay: 200, onError: (error) => void errors.push(String(error)) });
 
 const transport: typeof inner = {
-  subscribe: (topic, onEvent) =>
-    inner.subscribe(topic, (event) => {
-      events.push(event);
-      onEvent(event);
-    }),
+  subscribe: (topic, onEvent, onRefused) =>
+    inner.subscribe(
+      topic,
+      (event) => {
+        events.push(event);
+        onEvent(event);
+      },
+      onRefused,
+    ),
   onReconnect: (callback) => inner.onReconnect(callback),
 };
 
@@ -60,7 +65,11 @@ function Expose() {
 
 function App(props: { ids: ReadonlyArray<string>; list: boolean }) {
   return (
-    <RecordsProvider client={client} transport={transport}>
+    <RecordsProvider
+      client={client}
+      transport={transport}
+      onRefused={({ name, topic, error }) => void refusals.push({ name, topic, code: 'code' in error ? String(error.code) : undefined, message: error.message })}
+    >
       <Expose />
       {props.list ? <List boardId="b-1" /> : null}
       {props.ids.map((id, i) => (
@@ -87,6 +96,7 @@ const harness = {
   rename: (id: string, title: string) => rename?.(id, title),
   errors,
   events,
+  refusals,
 };
 
 Object.assign(window, { harness });

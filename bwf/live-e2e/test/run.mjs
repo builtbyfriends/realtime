@@ -240,6 +240,64 @@ try {
     await context.close();
   });
 
+  await check('an ended subscription is asked for again, and events keep coming when the server allows it', async () => {
+    const { context, page, seen } = await freshPage(browser, script);
+    const api = context.request;
+    const asks = () => subscribes(seen).filter((op) => op.topic === 'notes:n-11').length;
+    await page.evaluate(() => window.harness.mount(['n-11'], true));
+    await until(() => page.evaluate(() => window.harness.titles()['n-11#0'] === 'Note 11'), 'the first fill');
+    await sleep(300);
+    const before = { asks: asks(), streams: seen.streams, calls: seen.calls };
+    output.revokedThenAllowed = [];
+
+    for (const round of [1, 2]) {
+      const ended = await (await api.post(`${direct}/revoke`, { data: { topic: 'notes:n-11' } })).json();
+      assert.equal(ended.revoked, 1, `the stream ended ${JSON.stringify(ended)} subscriptions`);
+      await until(() => asks() === before.asks + round, 'the window to ask again');
+      await until(() => seen.calls > before.calls + round - 1, 'the window to load again');
+      const title = `After ${round}`;
+      const answer = await callApi(api, 'notes.rename', { id: 'n-11', title, requestId: crypto.randomUUID() });
+      assert.equal(answer.ok, true, JSON.stringify(answer));
+      await until(() => page.evaluate((t) => window.harness.titles()['n-11#0'] === t, title), `the event after round ${round}`);
+      output.revokedThenAllowed.push({ round, asks: asks() - before.asks, streams: seen.streams, calls: seen.calls - before.calls });
+    }
+
+    assert.equal(seen.streams, before.streams, 'the stream opened again');
+    assert.deepEqual(await page.evaluate(() => window.harness.refusals), [], 'the app was told it was refused');
+    await context.close();
+  });
+
+  await check('an ended subscription the server refuses is reported once, and nothing asks again', async () => {
+    const { context, page, seen } = await freshPage(browser, script);
+    const api = context.request;
+    const asks = () => subscribes(seen).filter((op) => op.topic === 'notes:n-12').length;
+    await page.evaluate(() => window.harness.mount(['n-12'], false));
+    await until(() => page.evaluate(() => window.harness.titles()['n-12#0'] === 'Note 12'), 'the first fill');
+    await sleep(300);
+    const before = asks();
+    await api.post(`${direct}/access`, { data: { deny: ['notes:n-12'] } });
+
+    try {
+      const ended = await (await api.post(`${direct}/revoke`, { data: { topic: 'notes:n-12' } })).json();
+      assert.equal(ended.revoked, 1);
+      await until(() => page.evaluate(() => window.harness.refusals.length), 'the app to be told');
+      await sleep(1500);
+      const refusals = await page.evaluate(() => window.harness.refusals);
+      output.revokedThenRefused = { refusals, asks: asks() - before, streams: seen.streams };
+      assert.equal(refusals.length, 1, 'the app was told more than once');
+      assert.deepEqual({ name: refusals[0].name, topic: refusals[0].topic }, { name: 'notes.Note', topic: 'notes:n-12' });
+      assert.equal(asks() - before, 1, 'the window asked more than once');
+      const answer = await callApi(api, 'notes.rename', { id: 'n-12', title: 'Not for this window', requestId: crypto.randomUUID() });
+      assert.equal(answer.ok, true, JSON.stringify(answer));
+      await sleep(800);
+      assert.equal(await page.evaluate(() => window.harness.titles()['n-12#0']), 'Note 12', 'the window changed after the refusal');
+    } finally {
+      await api.post(`${direct}/access`, { data: { deny: [] } });
+    }
+
+    await context.close();
+  });
+
   await check('a drop and a reconnect load again and leave the newest record', async () => {
     const { context, page, seen } = await freshPage(browser, script);
     await page.evaluate(() => window.harness.mount(['n-7'], true));

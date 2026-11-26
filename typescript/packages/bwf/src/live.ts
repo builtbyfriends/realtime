@@ -16,7 +16,12 @@ export type ConnectLiveStream = (
     onError?: (error: unknown) => void;
   },
 ) => {
-  subscribe(options: { id: string; topic: string; onEvent?: (event: unknown) => void }): Promise<() => Promise<void>>;
+  subscribe(options: {
+    id: string;
+    topic: string;
+    onEvent?: (event: unknown) => void;
+    onRevoked?: (event: { subscriptionId: string; topic: string; reason?: string }) => void;
+  }): Promise<() => Promise<void>>;
   close(): void;
 };
 
@@ -115,16 +120,23 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
     return stream;
   }
 
+  type Entry = {
+    listeners: Set<(event?: unknown) => void>;
+    refusals: Set<(error: Error) => void>;
+    stop: Promise<() => Promise<void>>;
+    renewing: boolean;
+  };
+
   /**
    * One bwf subscription per topic, shared by every query listening to it. bwf allows a limited
    * number of subscriptions per topic and per connection (256 by default), and a page often has
    * many queries on the same topic, so one subscription each would run out.
    */
-  const topics = new Map<string, { listeners: Set<(event?: unknown) => void>; stop: Promise<() => Promise<void>> }>();
+  const topics = new Map<string, Entry>();
 
   const unsubscribing = new Map<string, Promise<void>>();
 
-  function release(topic: string, entry: { listeners: Set<(event?: unknown) => void>; stop: Promise<() => Promise<void>> }) {
+  function release(topic: string, entry: Entry) {
     if (entry.listeners.size || topics.get(topic) !== entry) {return;}
     topics.delete(topic);
     const done = entry.stop.then((stop) => stop()).catch(() => {});
@@ -134,41 +146,98 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
     });
   }
 
+  function ask(topic: string, entry: Entry) {
+    return open().subscribe({
+      id: topic,
+      topic,
+      onEvent: (event) => {
+        // oxlint-disable-next-line unicorn/no-useless-spread -- listeners may unsubscribe while being called
+        for (const listener of [...entry.listeners]) {listener(unwrap(event));}
+      },
+      onRevoked: () => renew(topic, entry),
+    });
+  }
+
+  let renewals = 0;
+  let renewed = false;
+
+  // Decision: when the app ends a subscription (bwf's `stream.revoke`), the helper doesn't send it again, and bwf's answer to
+  // a new subscribe is what says whether the person still has access. So this asks once. If it's accepted, the events published
+  // in between are lost, so the queries load again, once after all the renewals that were running. If it's refused, the
+  // listeners are told once and the topic is dropped, and nothing asks again until a listener subscribes to it anew.
+  function renew(topic: string, entry: Entry) {
+    if (topics.get(topic) !== entry || entry.renewing) {return;}
+
+    entry.renewing = true;
+    renewals += 1;
+    const next = ask(topic, entry);
+    entry.stop = next;
+
+    void next
+      .then(
+        () => {
+          renewed = true;
+        },
+        (error: unknown) => {
+          if (topics.get(topic) === entry) {topics.delete(topic);}
+
+          // oxlint-disable-next-line unicorn/no-useless-spread -- a callback may stop listening while the loop runs
+          for (const refused of [...entry.refusals]) {refused(error instanceof Error ? error : new Error(String(error)));}
+        },
+      )
+      .finally(() => {
+        entry.renewing = false;
+        renewals -= 1;
+
+        if (renewals === 0 && renewed) {
+          renewed = false;
+
+          // oxlint-disable-next-line unicorn/no-useless-spread -- a callback may unsubscribe while the loop runs
+          for (const cb of [...reconnects]) {cb();}
+        }
+      });
+  }
+
   return {
-    async subscribe(topic, onEvent) {
+    async subscribe(topic, onEvent, onRefused) {
       let entry = topics.get(topic);
+
       if (!entry) {
-        const listeners = new Set<(event?: unknown) => void>();
-        const subscribe = () =>
-          open().subscribe({
-            id: topic,
-            topic,
-            onEvent: (event) => {
-              // oxlint-disable-next-line unicorn/no-useless-spread -- listeners may unsubscribe while being called
-              for (const listener of [...listeners]) {listener(unwrap(event));}
-            },
-          });
+        const made: Entry = { listeners: new Set(), refusals: new Set(), stop: Promise.resolve(async () => {}), renewing: false };
         // Decision: a subscribe with a used id replaces it on the server, so wait for the queued unsubscribe of this topic first.
         const pending = unsubscribing.get(topic);
-        const stop = pending ? pending.then(subscribe) : subscribe();
-        entry = { listeners, stop };
-        topics.set(topic, entry);
-        const failed = entry;
+        const stop = pending ? pending.then(() => ask(topic, made)) : ask(topic, made);
+        made.stop = stop;
+        entry = made;
+        topics.set(topic, made);
+
         stop.catch(() => {
-          if (topics.get(topic) === failed) {topics.delete(topic);}
+          if (topics.get(topic) === made) {topics.delete(topic);}
         });
       }
+
       const listener = (event?: unknown) => onEvent(event);
       entry.listeners.add(listener);
+
+      if (onRefused) {entry.refusals.add(onRefused);}
+
       try {
         await entry.stop;
       } catch (error) {
         entry.listeners.delete(listener);
+
+        if (onRefused) {entry.refusals.delete(onRefused);}
+
         throw error;
       }
+
       const current = entry;
+
       return () => {
         current.listeners.delete(listener);
+
+        if (onRefused) {current.refusals.delete(onRefused);}
+
         release(topic, current);
       };
     },
