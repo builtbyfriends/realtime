@@ -13,6 +13,7 @@
       "entry": ["type-tests/**/*.ts"]
     },
     "packages/bwf": {
+      "entry": ["type-tests/**/*.ts"],
       // The Vite plugin writes an import of it into the generated entry (src/plugin.ts).
       "ignoreDependencies": ["@builtbyfriends/realtime-analytics"]
     },

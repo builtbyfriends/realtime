@@ -1,5 +1,9 @@
 # Changes
 
+## 0.8.1
+
+- A `Registry` of no particular procedures types `~procedures` as `object` again, not as a string index of procedures. An app whose procedure map is an interface, as bwf's codegen writes it, fits `createClient<App>` and `createBwfLive<App>` again, as on 0.4. Between 0.7.0 and 0.8.0 it failed with "Index signature for type 'string' is missing". A registry built from its procedures types its map from them, as before.
+
 ## 0.8.0
 
 - `contractChecks` also tries random runs of commands, made from the contract with fast-check. Each run starts a few records in random states, then sends a random string of moves, the other writes and repeats of earlier requests. A listed move has to land in its state, an unlisted one has to be refused and leave the record where it was, and a request sent again with its `requestId` has to get the first answer and publish nothing. This finds orders nobody wrote a test for, such as a repeat that comes after the record has moved on.
