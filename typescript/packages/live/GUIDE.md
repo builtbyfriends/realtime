@@ -80,7 +80,8 @@ An app can end a person's subscriptions with bwf's `stream.revoke()`, for exampl
 
 - It asks for the topic again, once. The server's `onSubscribe` answers for the person as they are now, so the answer is yes or no for each topic.
 - If the answer is yes, events keep coming. The ones published in between are lost, so every watched read loads again once, after all the topics that were asked for again.
-- If the answer is no, the listeners of the topic hear about it once, and nothing asks again. The record keeps the rows it has and gets no more events. The same goes for a subscribe that the server refuses the first time.
+- If the ask gets no answer (the network dropped, the server failed, the connection was lost), that says nothing about access. The topic stays, the app isn't told it was refused, and the transport asks again when the stream opens again or when a new listener joins the topic.
+- If the answer is no (the server sent a code such as `FORBIDDEN`, or a 4xx), the listeners of the topic hear about it once, and nothing asks again. The record keeps the rows it has and gets no more events. The same goes for a subscribe that the server refuses the first time.
 
 The app hears a refusal in `onRefused`, on `RecordsProvider` or in the options of `createRuntime`:
 

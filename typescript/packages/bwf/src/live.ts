@@ -58,6 +58,18 @@ function unwrap(event: unknown): unknown {
   return typeof type === 'string' ? { name: type, topic, payload: data } : event;
 }
 
+const TRANSIENT_CODES = new Set(['CONNECTION_NOT_FOUND', 'CONNECTION_CLOSED', 'INTERNAL_ERROR']);
+
+// Decision: a failed subscribe is the server's answer when bwf's `LiveStreamError` carries a `code` outside the ones that mean "the connection
+// or the server had a problem", or a 4xx status without a code. A network error, a 5xx, a 429 and a lost connection say nothing about access.
+function refusedBy(error: unknown): boolean {
+  if (!(error instanceof Error)) {return false;}
+
+  if ('code' in error && typeof error.code === 'string') {return !TRANSIENT_CODES.has(error.code);}
+
+  return 'status' in error && typeof error.status === 'number' && error.status >= 400 && error.status < 500 && error.status !== 429;
+}
+
 export type BwfTransportOptions = {
   /** `connectLiveStream` from `@builtbyfriends/bwf/live/client`. */
   connect: ConnectLiveStream;
@@ -102,6 +114,11 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
         super(url, init);
         this.addEventListener('open', () => {
           if (++opens > 1) {
+            // Decision: a topic that couldn't be asked for again (not refused: the ask never got an answer) is asked for once the stream is back.
+            for (const [topic, entry] of topics) {
+              if (entry.lost) {renew(topic, entry);}
+            }
+
             // oxlint-disable-next-line unicorn/no-useless-spread -- a callback may unsubscribe while the loop runs, so it walks a copy
             for (const cb of [...reconnects]) {cb();}
           }
@@ -125,6 +142,7 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
     refusals: Set<(error: Error) => void>;
     stop: Promise<() => Promise<void>>;
     renewing: boolean;
+    lost: boolean;
   };
 
   /**
@@ -164,11 +182,14 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
   // Decision: when the app ends a subscription (bwf's `stream.revoke`), the helper doesn't send it again, and bwf's answer to
   // a new subscribe is what says whether the person still has access. So this asks once. If it's accepted, the events published
   // in between are lost, so the queries load again, once after all the renewals that were running. If it's refused, the
-  // listeners are told once and the topic is dropped, and nothing asks again until a listener subscribes to it anew.
+  // listeners are told once and the topic is dropped, and nothing asks again until a listener subscribes to it anew. If the ask
+  // gets no answer (the network dropped, the server failed), that says nothing about access: the topic stays, nobody is told it was
+  // refused, and it's asked for again when the stream opens again or a listener subscribes to it.
   function renew(topic: string, entry: Entry) {
     if (topics.get(topic) !== entry || entry.renewing) {return;}
 
     entry.renewing = true;
+    entry.lost = false;
     renewals += 1;
     const next = ask(topic, entry);
     entry.stop = next;
@@ -179,6 +200,12 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
           renewed = true;
         },
         (error: unknown) => {
+          if (!refusedBy(error)) {
+            entry.lost = true;
+
+            return;
+          }
+
           if (topics.get(topic) === entry) {topics.delete(topic);}
 
           // oxlint-disable-next-line unicorn/no-useless-spread -- a callback may stop listening while the loop runs
@@ -202,8 +229,10 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
     async subscribe(topic, onEvent, onRefused) {
       let entry = topics.get(topic);
 
+      if (entry?.lost) {renew(topic, entry);}
+
       if (!entry) {
-        const made: Entry = { listeners: new Set(), refusals: new Set(), stop: Promise.resolve(async () => {}), renewing: false };
+        const made: Entry = { listeners: new Set(), refusals: new Set(), stop: Promise.resolve(async () => {}), renewing: false, lost: false };
         // Decision: a subscribe with a used id replaces it on the server, so wait for the queued unsubscribe of this topic first.
         const pending = unsubscribing.get(topic);
         const stop = pending ? pending.then(() => ask(topic, made)) : ask(topic, made);
@@ -219,19 +248,18 @@ export function bwfTransport(options: BwfTransportOptions): LiveTransport {
       const listener = (event?: unknown) => onEvent(event);
       entry.listeners.add(listener);
 
-      if (onRefused) {entry.refusals.add(onRefused);}
-
       try {
         await entry.stop;
       } catch (error) {
         entry.listeners.delete(listener);
 
-        if (onRefused) {entry.refusals.delete(onRefused);}
-
         throw error;
       }
 
       const current = entry;
+
+      // Decision: a listener whose own subscribe was refused hears it from the rejection, so it joins the ones told of a later refusal only once it's in.
+      if (onRefused) {current.refusals.add(onRefused);}
 
       return () => {
         current.listeners.delete(listener);
