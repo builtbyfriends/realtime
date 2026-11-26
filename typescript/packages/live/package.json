@@ -27,7 +27,9 @@
     }
   },
   "dependencies": {
-    "@builtbyfriends/realtime": "0.8.1"
+    "@builtbyfriends/realtime": "0.8.1",
+    "@tanstack/db": "1.0.0-rc.1.5",
+    "@tanstack/react-db": "1.0.0-rc.1.5"
   },
   "license": "MIT",
   "repository": {
